@@ -1,6 +1,6 @@
 import { createClient } from '@supabase/supabase-js'
 import { randomUUID } from 'node:crypto'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 
 const args = new Set(process.argv.slice(2))
@@ -71,7 +71,7 @@ const ownerUserIdFromEnv = value('SUPABASE_OWNER_USER_ID')
 const ownerEmail = value('SUPABASE_OWNER_EMAIL')
 const ownerPassword = value('SUPABASE_OWNER_PASSWORD')
 const createOwnerIfMissing = value('SUPABASE_CREATE_OWNER_IF_MISSING') === 'true'
-const migrationPath = path.join(root, 'supabase', 'migrations', '001_initial_schema.sql')
+const migrationsDir = path.join(root, 'supabase', 'migrations')
 
 const checks = []
 const cleanupTasks = []
@@ -146,8 +146,8 @@ async function applyMigration() {
     return
   }
 
-  if (!existsSync(migrationPath)) {
-    check('migration-file', 'SQL migration file', 'fail', `Missing ${migrationPath}.`)
+  if (!existsSync(migrationsDir)) {
+    check('migration-file', 'SQL migration files', 'fail', `Missing ${migrationsDir}.`)
     return
   }
 
@@ -162,9 +162,19 @@ async function applyMigration() {
     return
   }
 
-  const sql = readFileSync(migrationPath, 'utf8')
-  await client.query(sql)
-  check('migration', 'SQL migration', 'pass', 'Applied supabase/migrations/001_initial_schema.sql to the live database.')
+  const migrationFiles = readdirSync(migrationsDir)
+    .filter((file) => file.endsWith('.sql'))
+    .sort((a, b) => a.localeCompare(b))
+
+  if (migrationFiles.length === 0) {
+    check('migration-file', 'SQL migration files', 'fail', `No SQL migrations found in ${migrationsDir}.`)
+    return
+  }
+
+  for (const file of migrationFiles) {
+    await client.query(readFileSync(path.join(migrationsDir, file), 'utf8'))
+  }
+  check('migration', 'SQL migration', 'pass', `Applied ${migrationFiles.length} SQL migrations to the live database.`)
 }
 
 async function inspectRlsAndPolicies() {
@@ -420,10 +430,12 @@ async function insertOrFail(client, table, payload, label) {
   return data
 }
 
-async function expectInsertDenied(client, table, payload, label) {
+async function expectInsertDenied(client, table, payload, label, cleanupInserted) {
   const { data, error } = await client.from(table).insert(payload).select('*').single()
   if (!error) {
-    if (data?.id) {
+    if (cleanupInserted) {
+      await cleanupInserted(data)
+    } else if (data?.id) {
       await client.from(table).delete().eq('id', data.id)
     }
     throw new Error(`${label}: insert unexpectedly succeeded.`)
@@ -585,6 +597,81 @@ async function testTableRls(serviceClient, primary, secondary) {
     throw new Error('Secondary user can read a primary user document.')
   }
 
+  await expectInsertDenied(
+    secondary.client,
+    'documents',
+    {
+      owner_id: secondary.user.id,
+      category_id: primaryCategory.id,
+      title: `Verification cross-category ${runId}`,
+      storage_path: `${secondary.user.id}/__verify/${runId}-cross-category.html`,
+      metadata: { run_id: runId, expected: 'denied' },
+    },
+    'insert document with another owner category',
+  )
+
+  await expectInsertDenied(
+    secondary.client,
+    'document_tags',
+    {
+      owner_id: secondary.user.id,
+      document_id: primaryDocument.id,
+      tag_id: primaryTag.id,
+    },
+    'insert document tag with another owner document/tag',
+    async () => {
+      await secondary.client.from('document_tags').delete().eq('document_id', primaryDocument.id).eq('tag_id', primaryTag.id)
+    },
+  )
+
+  await expectInsertDenied(
+    secondary.client,
+    'reading_sessions',
+    {
+      owner_id: secondary.user.id,
+      document_id: primaryDocument.id,
+      duration_seconds: 1,
+      last_scroll: 0,
+    },
+    'insert reading session with another owner document',
+  )
+
+  await expectInsertDenied(
+    secondary.client,
+    'highlights',
+    {
+      owner_id: secondary.user.id,
+      document_id: primaryDocument.id,
+      selected_text: `Cross-user highlight ${runId}`,
+    },
+    'insert highlight with another owner document',
+  )
+
+  await expectInsertDenied(
+    secondary.client,
+    'notes',
+    {
+      owner_id: secondary.user.id,
+      document_id: primaryDocument.id,
+      body: `Cross-user note ${runId}`,
+    },
+    'insert note with another owner document',
+  )
+
+  await expectInsertDenied(
+    secondary.client,
+    'ai_requests',
+    {
+      owner_id: secondary.user.id,
+      document_id: primaryDocument.id,
+      request_type: 'cross_user_health_check',
+      provider: 'verification',
+      model: 'verification',
+      status: 'ok',
+    },
+    'insert AI request with another owner document',
+  )
+
   const updated = await primary.client
     .from('documents')
     .update({ favorite: true })
@@ -594,7 +681,7 @@ async function testTableRls(serviceClient, primary, secondary) {
   if (updated.error) throw updated.error
   if (!updated.data?.favorite) throw new Error('Primary user could not update own document.')
 
-  check('rls-live', 'RLS live behavior', 'pass', 'Authenticated users can access own rows and cannot write/read another owner_id.')
+  check('rls-live', 'RLS live behavior', 'pass', 'Authenticated users can access own rows and cannot write/read another owner_id or another owner document relation.')
 }
 
 async function testStorage(serviceClient, primary, secondary) {

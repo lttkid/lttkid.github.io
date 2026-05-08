@@ -24,9 +24,22 @@ import type {
   StatsSummary,
   ClientPreflightResult,
 } from '../types'
+import { estimateReadMinutesFromHtml, extractPlainTextFromHtml, extractTitleFromHtml } from './html'
 import { isDemoMode, isSupabaseConfigured, maskSupabaseUrl, supabase } from './supabase'
 
 const HTML_BUCKET = 'html-docs'
+const MAX_INDEX_CHARS = 200000
+
+export type HtmlUploadStatus = 'uploaded' | 'duplicate' | 'failed'
+
+export interface HtmlUploadResult {
+  fileName: string
+  status: HtmlUploadStatus
+  message: string
+  title?: string
+  storagePath?: string
+  document?: DocumentRecord
+}
 
 function requireSupabase() {
   if (!supabase) {
@@ -46,6 +59,33 @@ function normalizeDocument(row: Record<string, unknown>): DocumentRecord {
     indexed_at: (row.indexed_at as string | null | undefined) ?? null,
     last_scroll: Number(row.last_scroll ?? 0),
   }
+}
+
+function countIndexedWords(text: string) {
+  const chineseChars = (text.match(/[\u4e00-\u9fff]/g) ?? []).length
+  const latinWords = text.replace(/[\u4e00-\u9fff]/g, ' ').split(/\s+/).filter(Boolean).length
+  return chineseChars + latinWords
+}
+
+function stripHtmlExtension(fileName: string) {
+  return fileName.replace(/\.(html?|HTML?)$/, '').trim() || 'untitled'
+}
+
+function slugify(value: string) {
+  const ascii = value
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+  return ascii || 'document'
+}
+
+async function hashBuffer(buffer: ArrayBuffer) {
+  const digest = await crypto.subtle.digest('SHA-256', buffer)
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('')
 }
 
 function cloneDemoPayload(): LibraryPayload {
@@ -281,6 +321,163 @@ export async function fetchDocumentHtml(document: DocumentRecord) {
   const { data, error } = await client.storage.from(HTML_BUCKET).download(document.storage_path)
   if (error) throw error
   return data.text()
+}
+
+async function uploadSingleHtmlFile(user: AppUser, file: File, categoryId: string | null): Promise<HtmlUploadResult> {
+  try {
+    if (!/\.(html?|HTML?)$/.test(file.name)) {
+      return {
+        fileName: file.name,
+        status: 'failed',
+        message: '上传失败：只支持 .html 或 .htm 文件。',
+      }
+    }
+
+    const buffer = await file.arrayBuffer()
+    const html = new TextDecoder().decode(buffer)
+    const hash = await hashBuffer(buffer)
+    const fallbackTitle = stripHtmlExtension(file.name)
+    const title = extractTitleFromHtml(html, fallbackTitle)
+    const indexedText = extractPlainTextFromHtml(html).slice(0, MAX_INDEX_CHARS)
+    const wordCount = countIndexedWords(indexedText)
+    const now = new Date()
+    const importedAt = now.toISOString()
+    const year = String(now.getFullYear())
+    const month = String(now.getMonth() + 1).padStart(2, '0')
+    const storagePath = `${user.id}/uploads/${year}/${month}/${slugify(title)}-${hash.slice(0, 12)}.html`
+    const category = categoryId ? demoCategories.find((item) => item.id === categoryId) ?? null : null
+
+    if (isDemoMode) {
+      const duplicate = demoDocuments.find((document) => document.file_hash === hash)
+      if (duplicate) {
+        return {
+          fileName: file.name,
+          status: 'duplicate',
+          title: duplicate.title,
+          storagePath: duplicate.storage_path,
+          document: duplicate,
+          message: '重复文件，已保留现有文档。',
+        }
+      }
+
+      const document: DocumentRecord = {
+        id: crypto.randomUUID(),
+        owner_id: user.id,
+        category_id: categoryId,
+        title,
+        storage_path: storagePath,
+        file_hash: hash,
+        source_modified_at: new Date(file.lastModified || now.getTime()).toISOString(),
+        imported_at: importedAt,
+        updated_at: importedAt,
+        archived: false,
+        favorite: false,
+        summary: null,
+        content_text: indexedText,
+        word_count: wordCount,
+        indexed_at: importedAt,
+        reading_estimate_minutes: estimateReadMinutesFromHtml(html),
+        last_read_at: null,
+        last_scroll: 0,
+        metadata: {
+          source: 'browser_upload',
+          original_name: file.name,
+          size: file.size,
+        },
+        category,
+        tags: [],
+      }
+      demoDocuments.unshift(document)
+      demoHtmlByPath[storagePath] = html
+      return {
+        fileName: file.name,
+        status: 'uploaded',
+        title,
+        storagePath,
+        document,
+        message: '已写入资料库，正文搜索已可用。',
+      }
+    }
+
+    const client = requireSupabase()
+    const { data: existing, error: duplicateError } = await client
+      .from('documents')
+      .select('*, categories(id, owner_id, name, color, sort_order, created_at)')
+      .eq('file_hash', hash)
+      .limit(1)
+      .maybeSingle()
+    if (duplicateError) throw duplicateError
+    if (existing) {
+      const document = normalizeDocument(existing)
+      return {
+        fileName: file.name,
+        status: 'duplicate',
+        title: document.title,
+        storagePath: document.storage_path,
+        document,
+        message: '重复文件，已保留现有文档。',
+      }
+    }
+
+    const { error: uploadError } = await client.storage.from(HTML_BUCKET).upload(storagePath, new Blob([buffer], { type: 'text/html' }), {
+      contentType: 'text/html',
+      upsert: false,
+    })
+    if (uploadError) throw uploadError
+
+    const record = {
+      owner_id: user.id,
+      category_id: categoryId,
+      title,
+      storage_path: storagePath,
+      file_hash: hash,
+      source_modified_at: new Date(file.lastModified || now.getTime()).toISOString(),
+      imported_at: importedAt,
+      archived: false,
+      favorite: false,
+      summary: null,
+      content_text: indexedText,
+      word_count: wordCount,
+      indexed_at: importedAt,
+      reading_estimate_minutes: estimateReadMinutesFromHtml(html),
+      metadata: {
+        source: 'browser_upload',
+        original_name: file.name,
+        size: file.size,
+      },
+    }
+
+    const { data, error } = await client
+      .from('documents')
+      .insert(record)
+      .select('*, categories(id, owner_id, name, color, sort_order, created_at)')
+      .single()
+    if (error) throw error
+
+    const document = normalizeDocument(data)
+    return {
+      fileName: file.name,
+      status: 'uploaded',
+      title,
+      storagePath,
+      document,
+      message: '已写入资料库，正文搜索已可用。',
+    }
+  } catch (error) {
+    return {
+      fileName: file.name,
+      status: 'failed',
+      message: error instanceof Error ? `上传失败：${error.message}` : '上传失败，可直接重试。',
+    }
+  }
+}
+
+export async function uploadHtmlFiles(user: AppUser, files: File[], categoryId: string | null) {
+  const results: HtmlUploadResult[] = []
+  for (const file of files) {
+    results.push(await uploadSingleHtmlFile(user, file, categoryId))
+  }
+  return results
 }
 
 export async function toggleDocumentFavorite(document: DocumentRecord, favorite: boolean) {

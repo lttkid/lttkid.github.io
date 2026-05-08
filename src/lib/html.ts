@@ -58,14 +58,9 @@ const readerStyle = `
   </style>
 `
 
-export function createReaderSrcDoc(rawHtml: string, initialScroll = 0) {
-  const sanitized = DOMPurify.sanitize(rawHtml, {
-    WHOLE_DOCUMENT: true,
-    ADD_TAGS: ['style'],
-    FORBID_TAGS: ['script', 'object', 'embed', 'applet'],
-    FORBID_ATTR: ['onerror', 'onload', 'onclick', 'onmouseover', 'onfocus', 'autofocus'],
-  })
+export type ReaderRenderMode = 'read' | 'interactive'
 
+function injectReaderShell(html: string, initialScroll: number) {
   const restoreScript = `
     <script>
       window.addEventListener('load', () => {
@@ -76,9 +71,9 @@ export function createReaderSrcDoc(rawHtml: string, initialScroll = 0) {
     </script>
   `
 
-  const withReaderStyle = /<\/head>/i.test(sanitized)
-    ? sanitized.replace(/<\/head>/i, `${readerStyle}</head>`)
-    : sanitized.replace(/<body[^>]*>/i, (match) => `${match}${readerStyle}`)
+  const withReaderStyle = /<\/head>/i.test(html)
+    ? html.replace(/<\/head>/i, `${readerStyle}</head>`)
+    : html.replace(/<body[^>]*>/i, (match) => `${match}${readerStyle}`)
 
   if (/<\/body>/i.test(withReaderStyle)) {
     return withReaderStyle.replace(/<\/body>/i, `${bridgeScript}${restoreScript}</body>`)
@@ -87,13 +82,31 @@ export function createReaderSrcDoc(rawHtml: string, initialScroll = 0) {
   return `<!doctype html><html><head><meta charset="utf-8" />${readerStyle}</head><body>${withReaderStyle}${bridgeScript}${restoreScript}</body></html>`
 }
 
-export function estimateReadMinutesFromHtml(html: string) {
-  const text = html
-    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-    .replace(/<[^>]+>/g, ' ')
+export function createReaderSrcDoc(rawHtml: string, initialScroll = 0, mode: ReaderRenderMode = 'read') {
+  if (mode === 'interactive') {
+    return injectReaderShell(rawHtml, initialScroll)
+  }
+
+  const sanitized = DOMPurify.sanitize(rawHtml, {
+    WHOLE_DOCUMENT: true,
+    ADD_TAGS: ['style'],
+    FORBID_TAGS: ['script', 'object', 'embed', 'applet'],
+    FORBID_ATTR: ['onerror', 'onload', 'onclick', 'onmouseover', 'onfocus', 'autofocus'],
+  })
+
+  return injectReaderShell(sanitized, initialScroll)
+}
+
+export function extractPlainTextFromHtml(html: string) {
+  const doc = new DOMParser().parseFromString(html, 'text/html')
+  doc.querySelectorAll('script, style, noscript').forEach((node) => node.remove())
+  return (doc.body?.textContent ?? doc.documentElement.textContent ?? '')
     .replace(/\s+/g, ' ')
     .trim()
+}
+
+export function estimateReadMinutesFromHtml(html: string) {
+  const text = extractPlainTextFromHtml(html)
 
   const chineseChars = (text.match(/[\u4e00-\u9fff]/g) ?? []).length
   const latinWords = text.replace(/[\u4e00-\u9fff]/g, ' ').split(/\s+/).filter(Boolean).length
@@ -101,7 +114,8 @@ export function estimateReadMinutesFromHtml(html: string) {
 }
 
 export function extractTitleFromHtml(html: string, fallback: string) {
-  const match = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)
-  const title = match?.[1]?.replace(/\s+/g, ' ').trim()
-  return title || fallback
+  const doc = new DOMParser().parseFromString(html, 'text/html')
+  const title = doc.querySelector('title')?.textContent?.replace(/\s+/g, ' ').trim()
+  const h1 = doc.querySelector('h1')?.textContent?.replace(/\s+/g, ' ').trim()
+  return title || h1 || fallback
 }

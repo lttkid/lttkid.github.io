@@ -42,6 +42,7 @@ export interface DocumentRecord {
   reading_estimate_minutes: number | null
   last_read_at: string | null
   last_scroll: number
+  metadata?: Record<string, unknown>
   category?: Category | null
   tags?: Tag[]
 }

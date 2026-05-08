@@ -14,7 +14,9 @@
     "verify:deployment": "node scripts/verify-deployment-artifacts.mjs",
     "test:smoke": "node tests/smoke.mjs",
     "test:live": "node tests/live-smoke.mjs",
-    "test:live:notes": "node tests/live-notes.mjs"
+    "test:live:notes": "node tests/live-notes.mjs",
+    "test:live:upload": "node tests/live-upload.mjs",
+    "test:live:isolation": "node tests/live-isolation.mjs"
   },
   "devDependencies": {
     "@types/dompurify": "^3.0.5",

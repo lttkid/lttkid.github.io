@@ -272,6 +272,11 @@ textarea {
   box-shadow: 0 14px 28px rgba(15, 23, 42, 0.18);
 }
 
+.primary-button.compact {
+  width: auto;
+  padding: 0 14px;
+}
+
 .ghost-button,
 .dock-actions button {
   padding: 0 14px;
@@ -459,6 +464,187 @@ textarea {
   min-width: 104px;
 }
 
+.upload-panel {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.2fr) minmax(160px, 0.7fr) minmax(240px, 1fr) auto;
+  gap: 12px;
+  align-items: end;
+  padding: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.76);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.78);
+  box-shadow: var(--soft-shadow);
+  backdrop-filter: blur(22px);
+}
+
+.upload-panel-copy {
+  display: grid;
+  gap: 6px;
+  align-self: center;
+}
+
+.upload-panel-copy span,
+.upload-results p {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.upload-progress-summary {
+  display: grid;
+  grid-column: 1 / -1;
+  gap: 8px;
+}
+
+.upload-progress-head {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.upload-progress-head span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.upload-progress-track {
+  overflow: hidden;
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.18);
+}
+
+.upload-progress-track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #2563eb 0%, #0ea5e9 100%);
+  transition: width 0.2s ease;
+}
+
+.upload-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.upload-actions .primary-button,
+.upload-actions .ghost-button {
+  width: auto;
+  white-space: nowrap;
+}
+
+.upload-results {
+  display: grid;
+  grid-column: 1 / -1;
+  gap: 8px;
+}
+
+.upload-result {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px;
+  background: rgba(248, 250, 252, 0.82);
+}
+
+.upload-result-body {
+  display: grid;
+  flex: 1;
+  gap: 4px;
+}
+
+.upload-result-head {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.upload-result-head strong {
+  min-width: 0;
+  word-break: break-word;
+}
+
+.upload-result-status {
+  flex-shrink: 0;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  background: rgba(148, 163, 184, 0.14);
+  color: #475569;
+}
+
+.upload-result-status.queued {
+  background: rgba(148, 163, 184, 0.16);
+  color: #475569;
+}
+
+.upload-result-status.uploading {
+  background: rgba(37, 99, 235, 0.12);
+  color: var(--blue);
+}
+
+.upload-result-status.uploaded {
+  background: rgba(16, 185, 129, 0.12);
+  color: #047857;
+}
+
+.upload-result-status.duplicate {
+  background: rgba(245, 158, 11, 0.14);
+  color: #b45309;
+}
+
+.upload-result-status.failed {
+  background: rgba(225, 29, 72, 0.12);
+  color: #be123c;
+}
+
+.upload-result-meta,
+.upload-result-path {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.upload-result-path {
+  word-break: break-all;
+}
+
+.upload-result-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.upload-results-empty {
+  grid-column: 1 / -1;
+}
+
+.upload-result.queued {
+  border-color: rgba(148, 163, 184, 0.24);
+}
+
+.upload-result.uploading {
+  border-color: rgba(37, 99, 235, 0.22);
+}
+
+.upload-result.uploaded {
+  border-color: rgba(16, 185, 129, 0.26);
+}
+
+.upload-result.duplicate {
+  border-color: rgba(245, 158, 11, 0.3);
+}
+
+.upload-result.failed {
+  border-color: rgba(225, 29, 72, 0.24);
+}
+
 input[type="color"] {
   min-height: 44px;
   padding: 5px;
@@ -546,6 +732,16 @@ input[type="color"] {
 
 .card-topline .icon-button {
   margin-left: auto;
+}
+
+.source-badge {
+  min-height: 24px;
+  border: 1px solid rgba(37, 99, 235, 0.16);
+  border-radius: 999px;
+  padding: 2px 8px;
+  color: #1d4ed8;
+  background: rgba(239, 246, 255, 0.74);
+  font-size: 12px;
 }
 
 .category-dot {
@@ -673,6 +869,60 @@ input[type="color"] {
 
 .deploy-panel.wide {
   grid-column: 1 / -1;
+}
+
+.health-zone-list {
+  display: grid;
+  gap: 10px;
+}
+
+.health-zone {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.health-zone div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.health-zone span {
+  border-radius: 999px;
+  padding: 3px 9px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.health-zone.pass span {
+  color: #047857;
+  background: rgba(16, 185, 129, 0.12);
+}
+
+.health-zone.warn span {
+  color: #92400e;
+  background: rgba(245, 158, 11, 0.14);
+}
+
+.health-zone.fail span {
+  color: #be123c;
+  background: rgba(225, 29, 72, 0.12);
+}
+
+.health-zone p,
+.health-zone em {
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.health-zone em {
+  font-style: normal;
+  font-size: 13px;
 }
 
 .ai-config-center {
@@ -1063,6 +1313,37 @@ input[type="color"] {
   align-items: center;
 }
 
+.reader-header-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.segmented-control {
+  display: inline-flex;
+  min-height: 38px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 3px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.segmented-control button {
+  min-width: 82px;
+  border: 0;
+  border-radius: 9px;
+  padding: 0 10px;
+  color: #475569;
+  background: transparent;
+  font-weight: 800;
+}
+
+.segmented-control button.active {
+  color: #fff;
+  background: #111827;
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.14);
+}
+
 .reader-title {
   min-width: 0;
   text-align: center;
@@ -1321,13 +1602,41 @@ input[type="color"] {
   .action-panel {
     width: 100%;
     max-width: none;
-    max-height: calc(100vh - 104px);
+    max-height: min(58vh, 460px);
   }
 
   .panel-controls,
   .dock-actions,
   .inline-editor,
+  .upload-panel,
   .manager-actions {
     grid-template-columns: 1fr;
+  }
+
+  .upload-actions,
+  .reader-header-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .upload-progress-head,
+  .upload-result,
+  .upload-result-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .upload-result-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .segmented-control,
+  .reader-header-actions .icon-button {
+    width: 100%;
+  }
+
+  .segmented-control button {
+    flex: 1;
   }
 }

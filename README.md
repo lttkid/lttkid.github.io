@@ -6,13 +6,14 @@
 
 - Supabase Auth 邮箱密码登录，无注册入口
 - 私密 HTML 文件库、分类、搜索、收藏、按导入/修改时间排序
+- 前端直接上传 `.html` / `.htm`，自动计算 hash、提取标题、写入正文索引并上传到当前用户私密路径
 - 同步时提取私密全文索引，资料库可搜索 HTML 正文并只显示命中片段
-- 沙盒 iframe 阅读 HTML，默认移除原始脚本并支持选中文字
+- 沙盒 iframe 阅读 HTML，默认阅读模式移除原始脚本；可信文档可手动切换交互模式运行文档内部点击逻辑
 - 阅读页浮动功能面板：AI 解释、摘要、高亮、模型和虚拟人物选择
 - AI 配置中心：脱敏展示模型配置、真实轻量健康检查、调用统计和失败诊断
 - 笔记中心：跨文档查看、筛选、编辑和删除高亮笔记，并跳回来源文档
 - 资料归档与恢复，不做危险硬删除
-- 部署中心：检查 Demo Mode、Supabase、登录、Storage、Edge Functions 状态
+- 系统体检：按前端站点、Supabase 后端、私密文件、AI 服务展示可读状态和修复建议
 - 阅读统计：时长、最近阅读、分类分布、未读数量、AI 调用次数
 - GitHub Actions 同步 `html/` 文件到 Supabase Storage，支持 dry-run 和同步摘要
 - GitHub Pages 自动部署静态前端
@@ -123,9 +124,14 @@ npm run prepare:content-repo -- ../html-vault-content --force
 npm run build
 npm run test:smoke
 npm run test:live
+npm run test:live:notes
+npm run test:live:upload
+npm run test:live:isolation
 npm run sync:html -- --dry-run
 ```
 
-`preflight` 在缺少真实密钥时会报告失败项，这是正常的上线前提醒。`test:smoke` 会在 Demo Mode 下自动检查桌面和移动端主流程。
+`preflight` 在缺少真实密钥时会报告失败项，这是正常的上线前提醒。`test:smoke` 会在 Demo Mode 下自动检查桌面和移动端主流程，包括上传入口、阅读模式、交互模式和部署体检入口。
 
 `test:live` 会强制关闭 Demo Mode，并用真实 Supabase 数据验证登录、文件库、`html-docs` Storage 下载和阅读页 iframe 渲染。运行前在 `.env.local` 或 shell 中设置 `VITE_SUPABASE_URL`、`VITE_SUPABASE_ANON_KEY`、`LIVE_TEST_EMAIL`、`LIVE_TEST_PASSWORD`；如果未设置 `LIVE_TEST_*`，脚本会退回使用 `SUPABASE_OWNER_EMAIL` 和 `SUPABASE_OWNER_PASSWORD`。
+
+`test:live:upload` 会用真实用户从前端上传一个测试 HTML，确认资料库出现、Storage 可下载、正文索引可搜索，并在结束时清理测试文件。`test:live:isolation` 需要额外设置 `LIVE_SECOND_EMAIL` 和 `LIVE_SECOND_PASSWORD`，用于验证用户 B 看不到用户 A 的文档、Storage、笔记和 AI 请求记录。

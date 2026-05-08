@@ -63,8 +63,10 @@ import {
   updateHighlightNote,
   updateReadingSession,
   updateDocumentManagement,
+  uploadHtmlFiles,
+  type HtmlUploadResult,
 } from './lib/data'
-import { createReaderSrcDoc } from './lib/html'
+import { createReaderSrcDoc, type ReaderRenderMode } from './lib/html'
 import { isDemoMode, isSupabaseConfigured, supabase } from './lib/supabase'
 import type {
   AiHealthResult,
@@ -97,7 +99,38 @@ type AuthState = {
   signOut: () => Promise<void>
 }
 
+type UploadQueueStatus = 'queued' | 'uploading' | HtmlUploadResult['status']
+
+type UploadQueueItem = {
+  id: string
+  file: File
+  fileName: string
+  status: UploadQueueStatus
+  message: string
+  title?: string
+  storagePath?: string
+  document?: DocumentRecord
+}
+
 const defaultRoute: RouteState = { view: 'library' }
+
+function createUploadQueueItem(file: File): UploadQueueItem {
+  return {
+    id: crypto.randomUUID(),
+    file,
+    fileName: file.name,
+    status: 'queued',
+    message: '等待开始，可批量上传。',
+  }
+}
+
+function getUploadStatusLabel(status: UploadQueueStatus) {
+  if (status === 'queued') return '待上传'
+  if (status === 'uploading') return '上传中'
+  if (status === 'uploaded') return '已完成'
+  if (status === 'duplicate') return '重复文件'
+  return '上传失败'
+}
 
 function parseHash(): RouteState {
   const [view, id] = window.location.hash.replace(/^#\/?/, '').split('/')
@@ -233,6 +266,15 @@ export default function App() {
     )
   }
 
+  const handleUploadDocuments = async (files: File[], categoryId: string | null) => {
+    if (!auth.user) return []
+    const results = await uploadHtmlFiles(auth.user, files, categoryId)
+    if (results.some((result) => result.status === 'uploaded')) {
+      await refresh()
+    }
+    return results
+  }
+
   const handleUpdateDocument = async (document: DocumentRecord, draft: DocumentUpdateDraft) => {
     const nextCategory = payload?.categories.find((category) => category.id === draft.category_id) ?? null
     const updatedDocument: DocumentRecord = {
@@ -312,17 +354,36 @@ export default function App() {
   }
 
   const handleProgress = useCallback((documentId: string, lastScroll: number) => {
+    const readAt = new Date().toISOString()
     setPayload((current) =>
-      current
-        ? {
-            ...current,
-            documents: current.documents.map((document) =>
-              document.id === documentId
-                ? { ...document, last_scroll: lastScroll, last_read_at: new Date().toISOString() }
-                : document,
-            ),
+      {
+        if (!current) return current
+
+        const documents = current.documents.map((document) =>
+          document.id === documentId
+            ? { ...document, last_scroll: lastScroll, last_read_at: readAt }
+            : document,
+        )
+        const recentDocuments = documents
+          .filter((document) => document.last_read_at)
+          .sort((a, b) => Date.parse(b.last_read_at ?? '') - Date.parse(a.last_read_at ?? ''))
+          .slice(0, 5)
+          .map((document) => ({
+            id: document.id,
+            title: document.title,
+            lastReadAt: document.last_read_at!,
+          }))
+
+        return {
+          ...current,
+          documents,
+          stats: {
+            ...current.stats,
+            unreadCount: documents.filter((document) => !document.last_read_at).length,
+            recentDocuments,
           }
-        : current,
+        }
+      },
     )
   }, [])
 
@@ -374,6 +435,7 @@ export default function App() {
           onOpen={(document) => navigate('reader', document.id)}
           onFavorite={handleFavorite}
           onCreateCategory={handleCreateCategory}
+          onUpload={handleUploadDocuments}
           onUpdateDocument={handleUpdateDocument}
           onLoadArchived={handleLoadArchived}
           onRestoreDocument={handleRestoreDocument}
@@ -563,6 +625,7 @@ function LibraryView({
   onOpen,
   onFavorite,
   onCreateCategory,
+  onUpload,
   onUpdateDocument,
   onLoadArchived,
   onRestoreDocument,
@@ -573,6 +636,7 @@ function LibraryView({
   onOpen: (document: DocumentRecord) => void
   onFavorite: (document: DocumentRecord, favorite: boolean) => void
   onCreateCategory: (draft: Pick<Category, 'name' | 'color'>) => Promise<void>
+  onUpload: (files: File[], categoryId: string | null) => Promise<HtmlUploadResult[]>
   onUpdateDocument: (document: DocumentRecord, draft: DocumentUpdateDraft) => Promise<void>
   onLoadArchived: () => Promise<void>
   onRestoreDocument: (document: DocumentRecord) => Promise<void>
@@ -584,6 +648,57 @@ function LibraryView({
   const [archiveMode, setArchiveMode] = useState(false)
   const [managedDocument, setManagedDocument] = useState<DocumentRecord | null>(null)
   const [creatingCategory, setCreatingCategory] = useState(false)
+  const [uploading, setUploading] = useState(false)
+  const [uploadOpen, setUploadOpen] = useState(false)
+  const [uploadCategoryId, setUploadCategoryId] = useState('')
+  const [uploadItems, setUploadItems] = useState<UploadQueueItem[]>([])
+
+  const handleUploadFileSelection = (files: File[]) => {
+    setUploadItems(files.map((file) => createUploadQueueItem(file)))
+  }
+
+  const runUploadQueue = async (targetIds?: string[]) => {
+    if (uploading) return
+    const itemsToUpload = uploadItems.filter((item) =>
+      targetIds ? targetIds.includes(item.id) : item.status === 'queued',
+    )
+    if (itemsToUpload.length === 0) return
+
+    setUploading(true)
+    try {
+      for (const item of itemsToUpload) {
+        setUploadItems((current) =>
+          current.map((entry) =>
+            entry.id === item.id
+              ? {
+                  ...entry,
+                  status: 'uploading',
+                  message: '正在写入资料库并生成正文索引。',
+                }
+              : entry,
+          ),
+        )
+
+        const [result] = await onUpload([item.file], uploadCategoryId || null)
+        setUploadItems((current) =>
+          current.map((entry) =>
+            entry.id === item.id
+              ? {
+                  ...entry,
+                  status: result.status,
+                  message: result.message,
+                  title: result.title,
+                  storagePath: result.storagePath,
+                  document: result.document,
+                }
+              : entry,
+          ),
+        )
+      }
+    } finally {
+      setUploading(false)
+    }
+  }
 
   const sourceDocuments = archiveMode ? archivedDocuments : payload.documents
   const searchResults = useMemo(() => {
@@ -652,6 +767,10 @@ function LibraryView({
           <Folder size={18} />
           新建分类
         </button>
+        <button className={uploadOpen ? 'primary-button compact active' : 'primary-button compact'} onClick={() => setUploadOpen((value) => !value)}>
+          <UploadCloud size={18} />
+          上传 HTML
+        </button>
         <button
           className={archiveMode ? 'ghost-button active' : 'ghost-button'}
           onClick={() => {
@@ -666,6 +785,19 @@ function LibraryView({
       </div>
 
       <AnimatePresence>
+        {uploadOpen ? (
+          <HtmlUploadPanel
+            categories={payload.categories}
+            categoryId={uploadCategoryId}
+            items={uploadItems}
+            uploading={uploading}
+            onCategoryChange={setUploadCategoryId}
+            onFilesChange={handleUploadFileSelection}
+            onCancel={() => setUploadOpen(false)}
+            onUpload={() => runUploadQueue()}
+            onRetry={(itemId) => runUploadQueue([itemId])}
+          />
+        ) : null}
         {creatingCategory ? (
           <CategoryCreator
             onCancel={() => setCreatingCategory(false)}
@@ -726,6 +858,161 @@ function LibraryView({
   )
 }
 
+function HtmlUploadPanel({
+  categories,
+  categoryId,
+  items,
+  uploading,
+  onCategoryChange,
+  onFilesChange,
+  onUpload,
+  onRetry,
+  onCancel,
+}: {
+  categories: Category[]
+  categoryId: string
+  items: UploadQueueItem[]
+  uploading: boolean
+  onCategoryChange: (categoryId: string) => void
+  onFilesChange: (files: File[]) => void
+  onUpload: () => Promise<void>
+  onRetry: (itemId: string) => Promise<void>
+  onCancel: () => void
+}) {
+  const resolvedCount = items.filter(
+    (item) => item.status === 'uploaded' || item.status === 'duplicate' || item.status === 'failed',
+  ).length
+  const activeItem = items.find((item) => item.status === 'uploading') ?? null
+  const progressRatio =
+    items.length === 0 ? 0 : Math.min(100, ((resolvedCount + (activeItem ? 0.5 : 0)) / items.length) * 100)
+  const progressText = activeItem
+    ? `正在处理 ${resolvedCount + 1} / ${items.length}：${activeItem.fileName}`
+    : items.length > 0
+      ? `已处理 ${resolvedCount} / ${items.length}`
+      : '选择多个 HTML 后会逐项显示进度和结果。'
+
+  return (
+    <motion.form
+      className="upload-panel"
+      initial={{ opacity: 0, y: -8 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -8 }}
+      onSubmit={(event) => {
+        event.preventDefault()
+        void onUpload()
+      }}
+    >
+      <div className="upload-panel-copy">
+        <strong>从本机上传 HTML</strong>
+        <span>文件会进入你的私密 Storage，只写入当前登录用户的资料库。</span>
+      </div>
+      <label>
+        分类
+        <select value={categoryId} onChange={(event) => onCategoryChange(event.target.value)} disabled={uploading}>
+          <option value="">未分类</option>
+          {categories.map((category) => (
+            <option key={category.id} value={category.id}>
+              {category.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="file-picker">
+        HTML 文件
+        <input
+          type="file"
+          accept=".html,.htm,text/html"
+          multiple
+          disabled={uploading}
+          onChange={(event) => {
+            onFilesChange(Array.from(event.currentTarget.files ?? []))
+            event.currentTarget.value = ''
+          }}
+        />
+      </label>
+      <div className="upload-actions">
+        <button className="primary-button" type="submit" disabled={uploading || items.every((item) => item.status !== 'queued')}>
+          {uploading ? <Loader2 className="spin" size={18} /> : <UploadCloud size={18} />}
+          {items.some((item) => item.status === 'queued')
+            ? `上传 ${items.filter((item) => item.status === 'queued').length} 个文件`
+            : '选择文件后开始上传'}
+        </button>
+        <button className="ghost-button" type="button" onClick={onCancel} disabled={uploading}>
+          <X size={18} />
+          收起
+        </button>
+      </div>
+      <div className="upload-progress-summary" aria-live="polite">
+        <div className="upload-progress-head">
+          <strong>逐项进度</strong>
+          <span>{progressText}</span>
+        </div>
+        <div className="upload-progress-track" aria-hidden="true">
+          <span style={{ width: `${progressRatio}%` }} />
+        </div>
+      </div>
+      {items.length > 0 ? (
+        <div className="upload-results" aria-live="polite">
+          {items.map((item) => (
+            <div className={`upload-result ${item.status}`} key={item.id}>
+              <span>
+                {item.status === 'uploaded' ? (
+                  <Check size={16} />
+                ) : item.status === 'duplicate' ? (
+                  <ShieldCheck size={16} />
+                ) : item.status === 'uploading' ? (
+                  <Loader2 className="spin" size={16} />
+                ) : item.status === 'failed' ? (
+                  <X size={16} />
+                ) : (
+                  <UploadCloud size={16} />
+                )}
+              </span>
+              <div className="upload-result-body">
+                <div className="upload-result-head">
+                  <strong>{item.fileName}</strong>
+                  <span className={`upload-result-status ${item.status}`}>{getUploadStatusLabel(item.status)}</span>
+                </div>
+                {item.title ? <p className="upload-result-meta">文档标题：{item.title}</p> : null}
+                <p>{item.message}</p>
+                {item.storagePath ? <p className="upload-result-path">Storage: {item.storagePath}</p> : null}
+              </div>
+              <div className="upload-result-actions">
+                {item.status === 'failed' ? (
+                  <button
+                    className="ghost-button compact"
+                    type="button"
+                    onClick={() => void onRetry(item.id)}
+                    disabled={uploading}
+                  >
+                    <RefreshCcw size={16} />
+                    重试
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="upload-results upload-results-empty" aria-live="polite">
+          <div className="upload-result queued">
+            <span>
+              <UploadCloud size={16} />
+            </span>
+            <div className="upload-result-body">
+              <div className="upload-result-head">
+                <strong>尚未选择文件</strong>
+                <span className="upload-result-status queued">{getUploadStatusLabel('queued')}</span>
+              </div>
+              <p>支持批量选择 `.html` / `.htm` 文件，上传结果会逐项展示，失败项可直接重试。</p>
+            </div>
+          </div>
+        </div>
+      )}
+    </motion.form>
+  )
+}
+
 function DocumentCard({
   document,
   searchSnippet,
@@ -741,11 +1028,13 @@ function DocumentCard({
   onManage?: (document: DocumentRecord) => void
   onRestore?: (document: DocumentRecord) => void
 }) {
+  const sourceLabel = document.metadata?.source === 'browser_upload' ? '前端上传' : '同步导入'
   return (
     <motion.article className="document-card" layout whileHover={{ y: -4 }} transition={{ duration: 0.2 }}>
       <div className="card-topline">
         <span className="category-dot" style={{ backgroundColor: document.category?.color ?? '#64748B' }} />
         <span>{document.category?.name ?? '未分类'}</span>
+        <span className="source-badge">{sourceLabel}</span>
         {onRestore ? (
           <button className="icon-button" onClick={() => onRestore(document)} title="恢复归档">
             <RotateCcw size={17} />
@@ -1055,17 +1344,49 @@ function DeployCenter({
   const passed = checks.filter((check) => check.status === 'pass').length
   const warnings = checks.filter((check) => check.status === 'warn').length
   const failed = checks.filter((check) => check.status === 'fail').length
+  const checkById = new Map(checks.map((check) => [check.id, check]))
+  const healthZones: Array<{
+    title: string
+    status: ClientPreflightResult['checks'][number]['status']
+    detail: string
+    fix: string
+  }> = [
+    {
+      title: '前端站点',
+      status: mergeCheckStatus([checkById.get('demo-mode'), checkById.get('supabase-env')]),
+      detail: checkById.get('supabase-env')?.detail ?? '正在检查前端配置。',
+      fix: '若异常，请确认 GitHub Pages Secrets 中有 VITE_SUPABASE_URL 和 VITE_SUPABASE_ANON_KEY。',
+    },
+    {
+      title: 'Supabase 后端',
+      status: mergeCheckStatus([checkById.get('auth-session')]),
+      detail: checkById.get('auth-session')?.detail ?? '正在检查登录会话。',
+      fix: '若异常，请重新登录，并确认 Supabase Auth 已创建该用户。',
+    },
+    {
+      title: '私密文件',
+      status: mergeCheckStatus([checkById.get('storage')]),
+      detail: checkById.get('storage')?.detail ?? '正在检查 html-docs。',
+      fix: 'Storage 不可访问时，请确认 html-docs bucket 和 RLS 已创建。',
+    },
+    {
+      title: 'AI 服务',
+      status: mergeCheckStatus([checkById.get('edge-functions'), checkById.get('ai-profile-config')]),
+      detail: checkById.get('edge-functions')?.detail ?? '正在检查 AI 服务。',
+      fix: '若异常，请确认 Edge Functions 已部署，并且 AI secrets 已配置。',
+    },
+  ]
 
   return (
     <section className="page-stack">
       <div className="page-header">
         <div>
-          <p className="eyebrow">Deploy</p>
-          <h1>部署中心</h1>
+          <p className="eyebrow">System Health</p>
+          <h1>系统体检</h1>
         </div>
         <button className="ghost-button" onClick={() => void run()} disabled={loading}>
           {loading ? <Loader2 className="spin" size={18} /> : <RefreshCcw size={18} />}
-          重新检查
+          重新体检
         </button>
       </div>
 
@@ -1080,7 +1401,7 @@ function DeployCenter({
 
       <section className="deploy-grid">
         <article className="deploy-panel">
-          <h2>上线状态</h2>
+          <h2>详细状态</h2>
           <div className="check-list">
             {checks.map((check) => (
               <div className={`check-row ${check.status}`} key={check.id}>
@@ -1098,14 +1419,19 @@ function DeployCenter({
         </article>
 
         <article className="deploy-panel">
-          <h2>部署步骤</h2>
-          <ol className="deploy-steps">
-            <li>在 Supabase 运行 `supabase/migrations/001_initial_schema.sql`。</li>
-            <li>关闭公开注册，只手动创建登录用户。</li>
-            <li>部署 `ai-profiles`、`ai-explain`、`ai-summarize` Edge Functions。</li>
-            <li>在 GitHub Pages 仓库添加 `VITE_SUPABASE_URL` 和 `VITE_SUPABASE_ANON_KEY`。</li>
-            <li>在私有 HTML 仓库添加 service role 相关 Secrets，然后运行同步 Action。</li>
-          </ol>
+          <h2>四项体检</h2>
+          <div className="health-zone-list">
+            {healthZones.map((zone) => (
+              <section className={`health-zone ${zone.status}`} key={zone.title}>
+                <div>
+                  <strong>{zone.title}</strong>
+                  <span>{statusText(zone.status)}</span>
+                </div>
+                <p>{zone.detail}</p>
+                {zone.status !== 'pass' ? <em>{zone.fix}</em> : null}
+              </section>
+            ))}
+          </div>
         </article>
 
         <AiConfigCenter
@@ -1118,7 +1444,7 @@ function DeployCenter({
         />
 
         <article className="deploy-panel wide">
-          <h2>安全提醒</h2>
+          <h2>安全边界</h2>
           <div className="security-grid">
             <span>
               <LockKeyhole size={17} />
@@ -1351,12 +1677,14 @@ function ReaderView({
   const [rawHtml, setRawHtml] = useState('')
   const [loading, setLoading] = useState(true)
   const [readerError, setReaderError] = useState('')
+  const [sessionError, setSessionError] = useState('')
   const [panelOpen, setPanelOpen] = useState(false)
   const [selectedText, setSelectedText] = useState('')
   const [noteDraft, setNoteDraft] = useState('')
   const [highlights, setHighlights] = useState<Highlight[]>([])
   const [progress, setProgress] = useState(document.last_scroll ?? 0)
   const [initialScroll, setInitialScroll] = useState(document.last_scroll ?? 0)
+  const [renderMode, setRenderMode] = useState<ReaderRenderMode>('read')
   const [aiAnswer, setAiAnswer] = useState('')
   const [aiLoading, setAiLoading] = useState(false)
   const [activePersonaId, setActivePersonaId] = useState(personas[0]?.id)
@@ -1369,12 +1697,14 @@ function ReaderView({
     const startScroll = document.last_scroll ?? 0
     setLoading(true)
     setReaderError('')
+    setSessionError('')
     setRawHtml('')
     setSelectedText('')
     setNoteDraft('')
     setHighlights([])
     setProgress(startScroll)
     setInitialScroll(startScroll)
+    setRenderMode('read')
     progressRef.current = startScroll
     void fetchDocumentHtml(document)
       .then(setRawHtml)
@@ -1420,16 +1750,27 @@ function ReaderView({
     sessionId.current = null
     let active = true
 
+    const reportSessionError = (error: unknown) => {
+      if (!active) return
+      setSessionError(error instanceof Error ? error.message : '阅读会话上报失败。')
+    }
+
     const flush = async () => {
       if (!sessionId.current) return
       const seconds = (Date.now() - startedAt.current) / 1000
-      await updateReadingSession(sessionId.current, seconds, progressRef.current)
-      await touchDocumentProgress(document, progressRef.current)
+      try {
+        await updateReadingSession(sessionId.current, seconds, progressRef.current)
+        await touchDocumentProgress(document, progressRef.current)
+      } catch (error) {
+        reportSessionError(error)
+      }
     }
 
-    void startReadingSession(user, document).then((id) => {
-      if (active) sessionId.current = id
-    })
+    void startReadingSession(user, document)
+      .then((id) => {
+        if (active) sessionId.current = id
+      })
+      .catch(reportSessionError)
 
     const interval = window.setInterval(() => {
       void flush()
@@ -1442,7 +1783,7 @@ function ReaderView({
     }
   }, [document.id, user.id])
 
-  const srcDoc = useMemo(() => createReaderSrcDoc(rawHtml, initialScroll), [initialScroll, rawHtml])
+  const srcDoc = useMemo(() => createReaderSrcDoc(rawHtml, initialScroll, renderMode), [initialScroll, rawHtml, renderMode])
 
   const explain = async () => {
     if (!selectedText) return
@@ -1480,6 +1821,14 @@ function ReaderView({
     setAiAnswer('已保存这段高亮和笔记。')
   }
 
+  const switchRenderMode = (nextMode: ReaderRenderMode) => {
+    if (nextMode === renderMode) return
+    const currentProgress = progressRef.current
+    setInitialScroll(currentProgress)
+    setProgress(currentProgress)
+    setRenderMode(nextMode)
+  }
+
   return (
     <section className="reader-shell">
       <header className="reader-header">
@@ -1491,14 +1840,44 @@ function ReaderView({
           <span>{document.category?.name ?? '未分类'}</span>
           <h1>{document.title}</h1>
         </div>
-        <button className={document.favorite ? 'icon-button active' : 'icon-button'} onClick={() => onFavorite(document, !document.favorite)}>
-          <Heart size={18} />
-        </button>
+        <div className="reader-header-actions">
+          <div className="segmented-control" aria-label="阅读渲染模式">
+            <button
+              type="button"
+              className={renderMode === 'read' ? 'active' : undefined}
+              aria-pressed={renderMode === 'read'}
+              onClick={() => switchRenderMode('read')}
+            >
+              阅读模式
+            </button>
+            <button
+              type="button"
+              className={renderMode === 'interactive' ? 'active' : undefined}
+              aria-pressed={renderMode === 'interactive'}
+              onClick={() => switchRenderMode('interactive')}
+            >
+              交互模式
+            </button>
+          </div>
+          <button className={document.favorite ? 'icon-button active' : 'icon-button'} onClick={() => onFavorite(document, !document.favorite)}>
+            <Heart size={18} />
+          </button>
+        </div>
       </header>
 
       <div className="reader-progress">
         <span style={{ width: `${Math.round(progress * 100)}%` }} />
       </div>
+      {renderMode === 'interactive' ? (
+        <InlineNotice
+          tone="warning"
+          title="交互模式已开启"
+          body="当前允许文档内部脚本和点击交互运行，请只对可信 HTML 使用。划词、笔记和阅读进度仍会保留。"
+        />
+      ) : null}
+      {sessionError ? (
+        <InlineNotice tone="warning" title="阅读会话上报失败" body={sessionError} />
+      ) : null}
 
       <div className="iframe-wrap">
         {loading ? (
@@ -1506,7 +1885,7 @@ function ReaderView({
         ) : readerError ? (
           <InlineNotice tone="danger" title="阅读文件加载失败" body={readerError} />
         ) : (
-          <iframe title={document.title} sandbox="allow-scripts allow-forms allow-popups" srcDoc={srcDoc} />
+          <iframe key={`${document.id}-${renderMode}`} title={document.title} sandbox="allow-scripts allow-forms allow-popups" srcDoc={srcDoc} />
         )}
       </div>
 
@@ -1925,6 +2304,19 @@ function formatDuration(seconds: number) {
 function formatLatency(milliseconds: number) {
   if (milliseconds < 1000) return `${milliseconds}ms`
   return `${(milliseconds / 1000).toFixed(1)}s`
+}
+
+function mergeCheckStatus(checks: Array<ClientPreflightResult['checks'][number] | undefined>) {
+  const present = checks.filter(Boolean) as ClientPreflightResult['checks']
+  if (present.some((check) => check.status === 'fail')) return 'fail'
+  if (present.length === 0 || present.some((check) => check.status === 'warn')) return 'warn'
+  return 'pass'
+}
+
+function statusText(status: ClientPreflightResult['checks'][number]['status']) {
+  if (status === 'pass') return '正常'
+  if (status === 'warn') return '需处理'
+  return '无法检查'
 }
 
 function buildSearchSnippet(document: DocumentRecord, query: string) {

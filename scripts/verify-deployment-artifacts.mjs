@@ -8,6 +8,7 @@ const requiredFiles = [
   '.github/workflows/deploy-supabase.yml',
   'supabase/config.toml',
   'supabase/migrations/001_initial_schema.sql',
+  'supabase/migrations/002_tighten_document_relation_rls.sql',
   'supabase/functions/ai-profiles/index.ts',
   'supabase/functions/ai-health/index.ts',
   'supabase/functions/ai-explain/index.ts',
@@ -16,6 +17,9 @@ const requiredFiles = [
   'scripts/supabase-live-init.mjs',
   'scripts/prepare-content-repo.mjs',
   'tests/live-smoke.mjs',
+  'tests/live-notes.mjs',
+  'tests/live-upload.mjs',
+  'tests/live-isolation.mjs',
   'templates/content-repo/.github/workflows/sync-html.yml',
   'templates/content-repo/scripts/content-preflight.mjs',
 ]
@@ -49,9 +53,14 @@ const migration = readIfExists('supabase/migrations/001_initial_schema.sql')
 check('Migration creates private html-docs bucket', migration.includes("'html-docs'") && migration.includes('false'), 'Storage bucket must be private.')
 check('Migration enables RLS', migration.includes('enable row level security'), 'Tables must be protected by RLS.')
 
+const relationRlsMigration = readIfExists('supabase/migrations/002_tighten_document_relation_rls.sql')
+check('Relation RLS migration validates document ownership', relationRlsMigration.includes('documents.owner_id = auth.uid()'), 'Child rows must not reference another user document.')
+
 const packageJson = readIfExists('package.json')
 check('Live Supabase verification script exists', packageJson.includes('supabase:live:init'), 'A real Supabase initializer/verifier command should be available.')
 check('Live frontend smoke script exists', packageJson.includes('test:live'), 'A real frontend login/library/reader smoke test should be available.')
+check('Live upload smoke script exists', packageJson.includes('test:live:upload'), 'A real frontend upload smoke test should be available.')
+check('Live isolation smoke script exists', packageJson.includes('test:live:isolation'), 'A real multi-user isolation smoke test should be available.')
 
 function readIfExists(relativePath) {
   const fullPath = path.join(root, relativePath)

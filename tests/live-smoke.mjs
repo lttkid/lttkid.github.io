@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { createClient } from '@supabase/supabase-js'
@@ -7,6 +7,16 @@ import { chromium } from 'playwright'
 const root = process.cwd()
 const baseUrl = process.env.LIVE_SMOKE_BASE_URL ?? 'http://127.0.0.1:4174/'
 let serverProcess = null
+
+function stopServer() {
+  if (!serverProcess?.pid) return
+  if (process.platform === 'win32') {
+    spawnSync('taskkill', ['/pid', String(serverProcess.pid), '/t', '/f'], { stdio: 'ignore' })
+  } else {
+    serverProcess.kill()
+  }
+  serverProcess = null
+}
 
 function parseEnvFile(filePath) {
   if (!existsSync(filePath)) return {}
@@ -54,6 +64,12 @@ function assert(value, message) {
   if (!value) throw new Error(message)
 }
 
+function unexpectedConsoleErrors(consoleErrors) {
+  return consoleErrors.filter(
+    (text) => !text.includes('Failed to load resource: the server responded with a status of 400'),
+  )
+}
+
 function failMissing(name, alternatives = []) {
   const suffix = alternatives.length ? ` (or ${alternatives.join(' / ')})` : ''
   throw new Error(`Missing ${name}${suffix}. Set it in .env.local or the shell environment.`)
@@ -99,7 +115,11 @@ async function ensureServer() {
   await waitForServer(baseUrl)
 }
 
-async function checkSupabaseData() {
+function isBrowserUpload(document) {
+  return document.metadata?.source === 'browser_upload'
+}
+
+async function createAuthedClient() {
   const client = createClient(supabaseUrl, supabaseAnonKey, {
     auth: {
       persistSession: false,
@@ -107,32 +127,70 @@ async function checkSupabaseData() {
     },
   })
 
-  const { data: authData, error: authError } = await client.auth.signInWithPassword({
+  const { data, error } = await client.auth.signInWithPassword({
     email: testEmail,
     password: testPassword,
   })
-  if (authError) throw new Error(`Supabase auth failed: ${authError.message}`)
-  assert(authData.user, 'Supabase auth did not return a user.')
+  if (error) throw new Error(`Supabase auth failed: ${error.message}`)
+  assert(data.user, 'Supabase auth did not return a user.')
+  return { client, user: data.user }
+}
 
-  const { data: documents, error: documentsError } = await client
+async function getSyncImportedDocument(client) {
+  const { data: documents, error } = await client
     .from('documents')
-    .select('id,title,storage_path')
+    .select('id,title,storage_path,metadata,last_scroll,last_read_at')
     .eq('archived', false)
     .order('imported_at', { ascending: false })
-    .limit(1)
-  if (documentsError) throw new Error(`Documents query failed: ${documentsError.message}`)
-  assert(documents?.length, 'No non-archived documents found for the live test user.')
+    .limit(100)
+  if (error) throw new Error(`Documents query failed: ${error.message}`)
+
+  const document = (documents ?? []).find((item) => !isBrowserUpload(item))
+  assert(document, 'No sync-imported non-archived document found for the live test user.')
 
   const { data: htmlBlob, error: storageError } = await client.storage
     .from('html-docs')
-    .download(documents[0].storage_path)
-  if (storageError) throw new Error(`Storage download failed: ${storageError.message}`)
+    .download(document.storage_path)
+  if (storageError) throw new Error(`Sync-imported Storage download failed: ${storageError.message}`)
 
   const html = await htmlBlob.text()
-  assert(html.trim().length > 0, 'First document HTML is empty.')
+  assert(html.trim().length > 0, 'Sync-imported document HTML is empty.')
+  return document
 }
 
-async function checkBrowserFlow() {
+async function createMissingStorageDocument(client, userId) {
+  const runId = Date.now().toString(36)
+  const title = `Live Missing Storage Smoke ${runId}`
+  const storagePath = `${userId}/missing/live-missing-storage-${runId}.html`
+
+  const { data, error } = await client
+    .from('documents')
+    .insert({
+      owner_id: userId,
+      title,
+      storage_path: storagePath,
+      archived: false,
+      favorite: false,
+      summary: '临时验证阅读失败提示的文档。',
+      reading_estimate_minutes: 1,
+      metadata: {
+        source: 'live_missing_storage_test',
+      },
+    })
+    .select('id,title,storage_path,metadata')
+    .single()
+  if (error) throw new Error(`Could not create missing-storage document: ${error.message}`)
+  return data
+}
+
+async function openDocumentFromLibrary(page, title) {
+  await page.getByRole('heading', { name: 'HTML 文件管理' }).waitFor({ timeout: 20000 })
+  await page.getByPlaceholder('搜索标题、摘要、分类、正文').fill(title)
+  const card = page.locator('.document-card').filter({ hasText: title }).first()
+  await card.getByRole('button', { name: '阅读' }).click()
+}
+
+async function checkBrowserFlow(syncDocument, missingDocument) {
   await ensureServer()
 
   const browser = await chromium.launch({ headless: true })
@@ -152,18 +210,15 @@ async function checkBrowserFlow() {
 
     await page.getByRole('heading', { name: 'HTML 文件管理' }).waitFor({ timeout: 20000 })
     await page.getByText('Supabase Secure').waitFor()
+    await page.locator('.source-badge', { hasText: '同步导入' }).first().waitFor({ timeout: 10000 })
 
-    const documentCount = await page.locator('.document-card').count()
-    assert(documentCount > 0, 'The live library rendered with zero documents.')
-
-    await page.locator('.document-card').first().getByRole('button', { name: '阅读' }).click()
+    await openDocumentFromLibrary(page, syncDocument.title)
     await page.locator('iframe').waitFor({ state: 'visible', timeout: 20000 })
 
-    const readerBody = page.frameLocator('iframe').locator('body')
-    await readerBody.waitFor({ timeout: 10000 })
-
-    const bodyText = (await readerBody.innerText()).trim()
-    assert(bodyText.length > 0, 'Reader iframe rendered empty HTML.')
+    const syncBody = page.frameLocator('iframe').locator('body')
+    await syncBody.waitFor({ timeout: 10000 })
+    const bodyText = (await syncBody.innerText()).trim()
+    assert(bodyText.length > 0, 'Sync-imported reader iframe rendered empty HTML.')
 
     const readerMetrics = await page.evaluate(() => {
       const iframe = document.querySelector('iframe')?.getBoundingClientRect()
@@ -175,19 +230,33 @@ async function checkBrowserFlow() {
     assert(readerMetrics.noHorizontalOverflow, 'Reader has horizontal overflow on desktop viewport.')
     assert(readerMetrics.iframeLargeEnough, 'Reader iframe is unexpectedly small.')
 
-    assert(consoleErrors.length === 0, `Console errors found:\n${consoleErrors.join('\n')}`)
+    await page.getByRole('button', { name: '返回资料库' }).click()
+    await openDocumentFromLibrary(page, missingDocument.title)
+    await page.getByText('阅读文件加载失败').waitFor({ timeout: 20000 })
+
+    const unexpectedErrors = unexpectedConsoleErrors(consoleErrors)
+    assert(unexpectedErrors.length === 0, `Console errors found:\n${unexpectedErrors.join('\n')}`)
   } finally {
     await page.close()
     await browser.close()
   }
 }
 
+let client
+let missingDocument
+
 try {
-  await checkSupabaseData()
-  await checkBrowserFlow()
-  console.log('Live smoke passed: login, library, storage download, and reader rendering are working.')
+  const auth = await createAuthedClient()
+  client = auth.client
+  const syncDocument = await getSyncImportedDocument(client)
+  missingDocument = await createMissingStorageDocument(client, auth.user.id)
+  await checkBrowserFlow(syncDocument, missingDocument)
+  console.log('Live smoke passed: sync-imported reader entry and reader failure notice are working.')
 } finally {
+  if (missingDocument && client) {
+    await client.from('documents').delete().eq('id', missingDocument.id)
+  }
   if (serverProcess) {
-    serverProcess.kill()
+    stopServer()
   }
 }

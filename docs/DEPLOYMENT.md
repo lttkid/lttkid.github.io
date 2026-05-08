@@ -59,23 +59,33 @@ Add repository secrets:
 
 Then enable Pages with GitHub Actions as the deployment source.
 
-In the deployed app, open **部署中心** after logging in. It should show:
+In the deployed app, open **系统体检** after logging in. It should show four readable status zones: frontend site, Supabase backend, private files, and AI service.
 
 - Demo Mode is disabled.
-- Supabase frontend config is present.
-- Login session is active.
+- Supabase frontend config is present and the login session is active.
 - `html-docs` private Storage is accessible.
 - `ai-profiles` returns at least one model profile.
 - The AI configuration center shows profiles without exposing API keys.
 - Clicking **测试 AI 连接** runs `ai-health` and records `health_check` rows in `ai_requests`.
 
-Before release, run the frontend live smoke test with a real Auth user that has at least one synced document:
+Before release, run the frontend smoke and live tests with a real Auth user that has at least one synced or uploaded document:
 
 ```bash
+npm run test:smoke
 npm run test:live
+npm run test:live:notes
+npm run test:live:upload
 ```
 
 Set `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `LIVE_TEST_EMAIL`, and `LIVE_TEST_PASSWORD` first. The test signs in through the UI, confirms the library renders real rows, downloads the first HTML file from private Storage, and verifies the reader iframe renders non-empty content.
+
+For the multi-user isolation check, create a second manual Auth user and set `LIVE_SECOND_EMAIL` plus `LIVE_SECOND_PASSWORD`, then run:
+
+```bash
+npm run test:live:isolation
+```
+
+That script verifies user B cannot see user A's document row, cannot download user A's Storage object, and cannot read user A's highlights or AI request records. V2 intentionally does not add shared libraries or public links.
 
 ## Private HTML Repository
 
@@ -142,8 +152,10 @@ After deploying, confirm:
 - Unknown visitors cannot download Storage objects.
 - Your manually created user can log in.
 - A private repo sync run creates `documents` rows and uploads files under `html-docs/{user-id}/...`.
+- Frontend upload creates documents under `html-docs/{user-id}/uploads/{yyyy}/{mm}/...` and writes `documents.owner_id` as the current user.
+- Reader starts in 阅读模式, and a trusted sample with inline click logic only responds after switching to 交互模式.
 - Selecting text in the reader opens the assistant panel and AI requests go through Edge Functions.
-- In **部署中心**, the AI configuration center can run a real lightweight health check for each enabled OpenAI-compatible profile.
+- In **系统体检**, the AI configuration center can run a real lightweight health check for each enabled OpenAI-compatible profile.
 - Saved highlights appear in **笔记中心**, where they can be filtered, edited, deleted, and opened back in the reader.
 - Archiving a document hides it from the default library, and the archive view can restore it.
 
@@ -155,3 +167,4 @@ After deploying, confirm:
 - AI calls fail: confirm Edge Functions are deployed, including `ai-health`, and `AI_API_KEY`, `AI_BASE_URL`, and `AI_MODEL` secrets are set.
 - `sync:html -- --dry-run` shows `scanned: 0`: confirm real files are under the configured `html/` directory and are not only `.gitkeep`.
 - Library full-text search finds titles but not body text: rerun the HTML sync after applying the migration so `content_text`, `word_count`, and `indexed_at` are populated.
+- Uploaded HTML is visible to the uploader but not another user: this is expected. V2 is strictly private per user; use `test:live:isolation` to confirm RLS and Storage policies.
