@@ -1,0 +1,47 @@
+name: Sync private HTML documents
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - 'html/**/*.html'
+      - 'scripts/sync-html.mjs'
+      - '.github/workflows/sync-html.yml'
+      - 'package.json'
+      - 'package-lock.json'
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+        if: ${{ hashFiles('package-lock.json') != '' }}
+      - run: npm install
+        if: ${{ hashFiles('package-lock.json') == '' }}
+      - run: npm run content:preflight
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_OWNER_USER_ID: ${{ secrets.SUPABASE_OWNER_USER_ID }}
+          HTML_SYNC_SOURCE_DIR: html
+          HTML_SYNC_BUCKET: html-docs
+      - run: npm run sync:html -- --dry-run
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_OWNER_USER_ID: ${{ secrets.SUPABASE_OWNER_USER_ID }}
+          HTML_SYNC_SOURCE_DIR: html
+          HTML_SYNC_BUCKET: html-docs
+      - run: npm run sync:html
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_OWNER_USER_ID: ${{ secrets.SUPABASE_OWNER_USER_ID }}
+          HTML_SYNC_SOURCE_DIR: html
+          HTML_SYNC_BUCKET: html-docs

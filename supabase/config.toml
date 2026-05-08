@@ -1,0 +1,13 @@
+project_id = "html-vault-reader"
+
+[functions.ai-profiles]
+verify_jwt = true
+
+[functions.ai-health]
+verify_jwt = true
+
+[functions.ai-explain]
+verify_jwt = true
+
+[functions.ai-summarize]
+verify_jwt = true

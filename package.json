@@ -1,0 +1,42 @@
+{
+  "name": "html-vault-reader",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "sync:html": "node scripts/sync-html.mjs",
+    "supabase:live:init": "node scripts/supabase-live-init.mjs",
+    "prepare:content-repo": "node scripts/prepare-content-repo.mjs",
+    "preflight": "node scripts/preflight.mjs",
+    "verify:deployment": "node scripts/verify-deployment-artifacts.mjs",
+    "test:smoke": "node tests/smoke.mjs",
+    "test:live": "node tests/live-smoke.mjs",
+    "test:live:notes": "node tests/live-notes.mjs"
+  },
+  "devDependencies": {
+    "@types/dompurify": "^3.0.5",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "playwright": "^1.59.1",
+    "typescript": "~6.0.2",
+    "vite": "^8.0.10"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.105.3",
+    "@tailwindcss/vite": "^4.2.4",
+    "@vitejs/plugin-react": "^6.0.1",
+    "clsx": "^2.1.1",
+    "dompurify": "^3.4.2",
+    "framer-motion": "^12.38.0",
+    "lucide-react": "^1.14.0",
+    "pg": "^8.16.3",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6",
+    "recharts": "^3.8.1",
+    "tailwind-merge": "^3.5.0",
+    "tailwindcss": "^4.2.4"
+  }
+}

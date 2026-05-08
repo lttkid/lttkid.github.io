@@ -1,0 +1,83 @@
+import { corsHeaders, jsonResponse } from '../_shared/cors.ts'
+import { chatCompletion, requireUser, resolveProfile, sanitizeAiError, stripHtml } from '../_shared/ai.ts'
+
+type SummaryBody = {
+  documentId: string
+  modelId?: string
+}
+
+Deno.serve(async (req) => {
+  if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
+
+  const started = new Date().toISOString()
+  let supabaseForLog: Awaited<ReturnType<typeof requireUser>>['supabase'] | null = null
+  let userId: string | null = null
+  let bodyForLog: Partial<SummaryBody> = {}
+  let profileForLog: ReturnType<typeof resolveProfile> | null = null
+  try {
+    const { supabase, user } = await requireUser(req)
+    supabaseForLog = supabase
+    userId = user.id
+    const body = (await req.json()) as SummaryBody
+    bodyForLog = body
+    const profile = resolveProfile(body.modelId)
+    profileForLog = profile
+    if (!profile) return jsonResponse({ error: 'No AI profile configured.' }, 500)
+    if (!body.documentId) return jsonResponse({ error: 'Missing documentId.' }, 400)
+
+    const { data: document, error: documentError } = await supabase
+      .from('documents')
+      .select('id,title,storage_path')
+      .eq('id', body.documentId)
+      .single()
+    if (documentError) throw documentError
+
+    const { data: file, error: fileError } = await supabase.storage.from('html-docs').download(document.storage_path)
+    if (fileError) throw fileError
+
+    const text = stripHtml(await file.text()).slice(0, 12000)
+    const answer = await chatCompletion({
+      profile,
+      messages: [
+        {
+          role: 'system',
+          content: '你是一个中文阅读助手。请输出 120 字以内摘要，并附上 3 到 6 个关键词。',
+        },
+        {
+          role: 'user',
+          content: `文档标题：${document.title}\n正文：${text}`,
+        },
+      ],
+    })
+
+    await Promise.all([
+      supabase.from('documents').update({ summary: answer }).eq('id', body.documentId),
+      supabase.from('ai_requests').insert({
+        owner_id: user.id,
+        document_id: body.documentId,
+        request_type: 'summarize',
+        provider: profile.provider,
+        model: profile.model,
+        status: 'ok',
+      }),
+    ])
+
+    return jsonResponse({ answer, model: profile.model })
+  } catch (error) {
+    if (error instanceof Response) return error
+    const sanitized = sanitizeAiError(error)
+    if (supabaseForLog && userId && profileForLog) {
+      await supabaseForLog.from('ai_requests').insert({
+        owner_id: userId,
+        document_id: bodyForLog.documentId ?? null,
+        request_type: 'summarize',
+        provider: profileForLog.provider,
+        model: profileForLog.model,
+        status: 'error',
+        error_message: sanitized,
+        created_at: started,
+      })
+    }
+    return jsonResponse({ error: sanitized }, 500)
+  }
+})

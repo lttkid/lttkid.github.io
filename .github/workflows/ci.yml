@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run verify:deployment
+      - run: node scripts/preflight.mjs --soft
+      - run: npm run prepare:content-repo -- ./tmp-content-repo --force
+      - run: node tmp-content-repo/scripts/content-preflight.mjs
+        env:
+          SUPABASE_URL: https://example.supabase.co
+          SUPABASE_SERVICE_ROLE_KEY: dry-run-service-role-key
+          SUPABASE_OWNER_USER_ID: 00000000-0000-4000-8000-000000000000
+          HTML_SYNC_SOURCE_DIR: tmp-content-repo/html
+          HTML_SYNC_BUCKET: html-docs
+      - run: npm run build
+      - run: npm run test:smoke

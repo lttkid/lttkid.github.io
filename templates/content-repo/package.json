@@ -1,0 +1,13 @@
+{
+  "name": "html-vault-content",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "content:preflight": "node scripts/content-preflight.mjs",
+    "sync:html": "node scripts/sync-html.mjs"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.105.3"
+  }
+}
