@@ -150,6 +150,13 @@ export function sanitizeAiError(error: unknown) {
     .slice(0, 700)
 }
 
+export type ChatMessageContent =
+  | string
+  | Array<
+      | { type: 'text'; text: string }
+      | { type: 'image_url'; image_url: { url: string } }
+    >
+
 export async function chatCompletion({
   profile,
   messages,
@@ -158,7 +165,7 @@ export async function chatCompletion({
   timeoutMs = 45000,
 }: {
   profile: AiProfile
-  messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>
+  messages: Array<{ role: 'system' | 'user' | 'assistant'; content: ChatMessageContent }>
   temperature?: number
   maxTokens?: number
   timeoutMs?: number

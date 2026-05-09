@@ -13,6 +13,7 @@ const requiredFiles = [
   'supabase/functions/ai-health/index.ts',
   'supabase/functions/ai-explain/index.ts',
   'supabase/functions/ai-summarize/index.ts',
+  'supabase/functions/ai-generate-html/index.ts',
   'scripts/sync-html.mjs',
   'scripts/supabase-live-init.mjs',
   'scripts/prepare-content-repo.mjs',
@@ -42,7 +43,7 @@ check('Pages deploys dist', pagesWorkflow.includes('actions/deploy-pages') && pa
 check('Pages uses public env only', pagesWorkflow.includes('VITE_SUPABASE_URL') && pagesWorkflow.includes('VITE_SUPABASE_ANON_KEY'), 'Frontend build should only receive anon Supabase config.')
 
 const supabaseWorkflow = readIfExists('.github/workflows/deploy-supabase.yml')
-check('Supabase workflow deploys all functions', ['ai-profiles', 'ai-health', 'ai-explain', 'ai-summarize'].every((name) => supabaseWorkflow.includes(`functions deploy ${name}`)), 'All Edge Functions used by the app must be deployed.')
+check('Supabase workflow deploys all functions', ['ai-profiles', 'ai-health', 'ai-explain', 'ai-summarize', 'ai-generate-html'].every((name) => supabaseWorkflow.includes(`functions deploy ${name}`)), 'All Edge Functions used by the app must be deployed.')
 check('Supabase workflow requires access token', supabaseWorkflow.includes('SUPABASE_ACCESS_TOKEN'), 'Backend deploys must use a GitHub secret access token.')
 
 const contentWorkflow = readIfExists('templates/content-repo/.github/workflows/sync-html.yml')

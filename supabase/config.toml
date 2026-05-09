@@ -11,3 +11,6 @@ verify_jwt = true
 
 [functions.ai-summarize]
 verify_jwt = true
+
+[functions.ai-generate-html]
+verify_jwt = true
