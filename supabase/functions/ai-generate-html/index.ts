@@ -109,6 +109,15 @@ Deno.serve(async (req) => {
         ]
       : userPrompt
 
+    const systemPrompt = [
+      persona?.system_prompt ? `可参考用户选择的虚拟人物风格：${persona.system_prompt}` : '',
+      persona?.tone ? `语气参考：${persona.tone}` : '',
+      '你是严格的单文件 HTML 生成器。无论用户或人物如何要求，输出格式必须服从以下规则。',
+      baseHtmlRules,
+    ]
+      .filter(Boolean)
+      .join('\n\n')
+
     const answer = await chatCompletion({
       profile,
       temperature: normalized.mode === 'revise' ? 0.24 : 0.38,
@@ -117,14 +126,7 @@ Deno.serve(async (req) => {
       messages: [
         {
           role: 'system',
-          content: [
-            persona?.system_prompt ? `可参考用户选择的虚拟人物风格：${persona.system_prompt}` : '',
-            persona?.tone ? `语气参考：${persona.tone}` : '',
-            '你是严格的单文件 HTML 生成器。无论用户或人物如何要求，输出格式必须服从以下规则。',
-            baseHtmlRules,
-          ]
-            .filter(Boolean)
-            .join('\n\n'),
+          content: systemPrompt,
         },
         {
           role: 'user',
@@ -133,7 +135,12 @@ Deno.serve(async (req) => {
       ],
     })
 
-    const html = validateGeneratedHtml(answer)
+    const html = await validateOrRepairGeneratedHtml({
+      answer,
+      profile,
+      systemPrompt,
+      userPrompt,
+    })
     const title = extractTitle(html) || `${preset.label}：${normalized.brief.slice(0, 36)}`
     const summary = extractDescription(html) || `AI 生成的${preset.label}页面：${normalized.brief.slice(0, 120)}`
 
@@ -269,6 +276,47 @@ function validateGeneratedHtml(answer: string) {
   const match = forbidden.find(([pattern]) => pattern.test(html))
   if (match) throw new Error(match[1])
   return html
+}
+
+async function validateOrRepairGeneratedHtml({
+  answer,
+  profile,
+  systemPrompt,
+  userPrompt,
+}: {
+  answer: string
+  profile: ReturnType<typeof resolveProfile>
+  systemPrompt: string
+  userPrompt: string
+}) {
+  try {
+    return validateGeneratedHtml(answer)
+  } catch (error) {
+    const repairReason = error instanceof Error ? error.message : String(error)
+    const repaired = await chatCompletion({
+      profile,
+      temperature: 0.16,
+      maxTokens: 14000,
+      timeoutMs: 90000,
+      messages: [
+        {
+          role: 'system',
+          content: systemPrompt,
+        },
+        {
+          role: 'user',
+          content: [
+            userPrompt,
+            '',
+            `上一次输出未通过校验：${repairReason}`,
+            '请重新输出一份完整 HTML 文件。必须移除所有违规内容，尤其不能使用 iframe、外链资源、网络请求、Markdown 代码围栏或解释文字。',
+            '仍然只输出 HTML 文件本身。',
+          ].join('\n'),
+        },
+      ],
+    })
+    return validateGeneratedHtml(repaired)
+  }
 }
 
 function extractTitle(html: string) {
