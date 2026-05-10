@@ -80,18 +80,13 @@ Deno.serve(async (req) => {
     const { supabase, user } = await requireUser(req)
 
     if (req.method === 'POST') {
-      const body = (await req.json().catch(() => ({}))) as {
-        action?: string
-        bindings?: Array<{ featureId?: string; profileId?: string }>
-        provider?: UserProviderInput
-        providerId?: string
-      }
+      const body = await readConfigBody(req)
 
       if (body.action === 'upsert_provider') {
         await upsertUserProvider(supabase, user.id, body.provider)
       } else if (body.action === 'delete_provider') {
         await deleteUserProvider(supabase, user.id, body.providerId)
-      } else {
+      } else if (Object.hasOwn(body, 'bindings')) {
         await saveBindings(supabase, user.id, body.bindings ?? [])
       }
     }
@@ -102,6 +97,24 @@ Deno.serve(async (req) => {
     return jsonResponse({ error: sanitizeAiError(error) }, 500)
   }
 })
+
+type ConfigBody = {
+        action?: string
+        bindings?: Array<{ featureId?: string; profileId?: string }>
+        provider?: UserProviderInput
+        providerId?: string
+}
+
+async function readConfigBody(req: Request): Promise<ConfigBody> {
+  const raw = await req.text().catch(() => '')
+  if (!raw.trim()) return {}
+
+  try {
+    return JSON.parse(raw) as ConfigBody
+  } catch {
+    return {}
+  }
+}
 
 type UserProviderInput = {
   id?: string
