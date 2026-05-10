@@ -360,6 +360,7 @@ export async function resolveProfileForFeature(
 ) {
   if (explicitModelId) return resolveProfile(explicitModelId, supabase, userId)
 
+  const profiles = await getAvailableProfiles(supabase, userId)
   const { data } = await supabase
     .from('ai_feature_bindings')
     .select('profile_id')
@@ -367,8 +368,18 @@ export async function resolveProfileForFeature(
     .eq('feature_id', featureId)
     .maybeSingle()
 
-  if (data?.profile_id) return resolveProfile(String(data.profile_id), supabase, userId)
-  return (await getAvailableProfiles(supabase, userId))[0] ?? null
+  if (data?.profile_id) {
+    return profiles.find((profile) => profile.id === String(data.profile_id)) ?? null
+  }
+
+  // When a feature is unbound, prefer the server default instead of the newest user Provider.
+  // This matches the UI copy: "未绑定：使用系统默认".
+  return (
+    profiles.find((profile) => profile.id === 'default') ??
+    profiles.find((profile) => profile.source !== 'user') ??
+    profiles[0] ??
+    null
+  )
 }
 
 async function importEncryptionKey(secret: string) {

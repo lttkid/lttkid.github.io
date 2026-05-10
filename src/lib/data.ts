@@ -1178,7 +1178,8 @@ async function translateFunctionError(error: unknown, fallbackCode: string) {
 
 function inferClientAiErrorCode(message: string, fallbackCode: string) {
   const lower = message.toLowerCase()
-  if (lower.includes('failed to send a request') || lower.includes('not_found') || lower.includes('404')) return 'FUNCTION_NOT_DEPLOYED'
+  if (lower.includes('not_found') || lower.includes('404')) return 'FUNCTION_NOT_DEPLOYED'
+  if (lower.includes('failed to send a request')) return fallbackCode
   if (lower.includes('timeout') || lower.includes('abort')) return 'MODEL_TIMEOUT'
   if (lower.includes('401') || lower.includes('403') || lower.includes('unauthorized')) return 'PROVIDER_AUTH_FAILED'
   if (lower.includes('markdown fences') || lower.includes('<!doctype html>') || lower.includes('output')) return 'MODEL_OUTPUT_INVALID'
@@ -1197,6 +1198,7 @@ function aiClientSuggestion(code: string) {
     AI_PROVIDER_DELETE_FAILED: 'API 平台没有删除成功，请刷新后重试。',
     AI_FEATURE_CONFIG_FAILED: '请刷新页面重试；若仍失败，请检查登录态、ai-feature-config 函数日志、migrations，以及是否存在需要重新保存的用户 API Key。',
     AI_HEALTH_FAILED: '请确认 ai-health 已部署，并检查 Supabase 登录态。',
+    AI_HTML_GENERATION_FAILED: '生成请求没有拿到稳定响应，常见原因是当前绑定模型过慢或 Provider 中途断开。请先在 API 配置中心把 AI HTML 生成绑定到系统默认或更快模型，再重试。',
   }
   return suggestions[code] ?? '请查看部署中心 AI 健康检查与 ai_requests 日志定位原因。'
 }
