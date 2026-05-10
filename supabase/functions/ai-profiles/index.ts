@@ -1,12 +1,12 @@
 import { corsHeaders, jsonResponse } from '../_shared/cors.ts'
-import { getProfiles, requireUser, sanitizeAiError, toPublicProfile } from '../_shared/ai.ts'
+import { getAvailableProfiles, requireUser, sanitizeAiError, toPublicProfile } from '../_shared/ai.ts'
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
 
   try {
-    await requireUser(req)
-    const profiles = getProfiles().map(toPublicProfile)
+    const { supabase, user } = await requireUser(req)
+    const profiles = await Promise.all((await getAvailableProfiles(supabase, user.id)).map(toPublicProfile))
     return jsonResponse({
       profiles,
       meta: {

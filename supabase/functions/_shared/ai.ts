@@ -9,6 +9,14 @@ export type AiProfile = {
   baseUrl?: string
   apiKeyEnv?: string
   baseUrlEnv?: string
+  source?: 'server' | 'user'
+  userProviderId?: string
+  apiKeyCiphertext?: string
+  apiKeyIv?: string
+  apiKeyHint?: string | null
+  ownerId?: string
+  supportsVision?: boolean
+  supportsHtmlGeneration?: boolean
 }
 
 export type PublicAiProfile = {
@@ -19,7 +27,14 @@ export type PublicAiProfile = {
   enabled: boolean
   configured: boolean
   baseUrlHost: string
+  source: 'server' | 'user'
+  userProviderId?: string
+  keyHint?: string | null
+  supportsVision?: boolean
+  supportsHtmlGeneration?: boolean
 }
+
+export type AiFeatureId = 'summarize' | 'explain' | 'generate_html' | 'image_question' | 'persona_chat'
 
 type RuntimeProfile = {
   profile: AiProfile
@@ -75,6 +90,7 @@ export function getProfiles(): AiProfile[] {
       provider: Deno.env.get('AI_PROVIDER') ?? 'openai-compatible',
       model: Deno.env.get('AI_MODEL') ?? 'server-configured-model',
       enabled: true,
+      source: 'server',
       baseUrl: Deno.env.get('AI_BASE_URL') ?? 'https://api.openai.com/v1',
       apiKeyEnv: 'AI_API_KEY',
     },
@@ -91,25 +107,128 @@ function normalizeProfile(profile: Partial<AiProfile>, index: number): AiProfile
     provider: String(profile.provider ?? 'openai-compatible'),
     model,
     enabled: profile.enabled !== false,
+    source: 'server',
     baseUrl: profile.baseUrl,
     apiKeyEnv: profile.apiKeyEnv,
     baseUrlEnv: profile.baseUrlEnv,
   }
 }
 
-export function resolveProfile(modelId?: string) {
-  const profiles = getProfiles()
+export async function getAvailableProfiles(supabase?: ReturnType<typeof getSupabaseForRequest>, userId?: string): Promise<AiProfile[]> {
+  const serverProfiles = getProfiles()
+  if (!supabase || !userId) return serverProfiles
+
+  const { data } = await supabase
+    .from('ai_user_providers')
+    .select('id,label,provider,base_url,base_url_host,model,api_key_ciphertext,api_key_iv,api_key_hint,supports_vision,supports_html_generation,enabled')
+    .eq('owner_id', userId)
+    .eq('enabled', true)
+    .order('updated_at', { ascending: false })
+
+  const userProfiles = (data ?? []).map((row: Record<string, unknown>): AiProfile => ({
+    id: `user:${row.id}`,
+    label: String(row.label ?? '用户自定义 API'),
+    provider: String(row.provider ?? 'openai-compatible'),
+    model: String(row.model ?? ''),
+    enabled: Boolean(row.enabled ?? true),
+    source: 'user',
+    userProviderId: String(row.id),
+    baseUrl: String(row.base_url ?? ''),
+    apiKeyCiphertext: String(row.api_key_ciphertext ?? ''),
+    apiKeyIv: String(row.api_key_iv ?? ''),
+    apiKeyHint: typeof row.api_key_hint === 'string' ? row.api_key_hint : null,
+    ownerId: userId,
+    supportsVision: Boolean(row.supports_vision),
+    supportsHtmlGeneration: Boolean(row.supports_html_generation ?? true),
+  }))
+
+  return [...userProfiles, ...serverProfiles]
+}
+
+export async function resolveProfile(
+  modelId?: string,
+  supabase?: ReturnType<typeof getSupabaseForRequest>,
+  userId?: string,
+) {
+  const profiles = await getAvailableProfiles(supabase, userId)
   return profiles.find((profile) => profile.id === modelId) ?? profiles[0]
 }
 
-export function resolveRuntimeProfile(profile: AiProfile): RuntimeProfile {
+export async function resolveProfileForFeature(
+  supabase: ReturnType<typeof getSupabaseForRequest>,
+  userId: string,
+  featureId: AiFeatureId,
+  explicitModelId?: string,
+) {
+  if (explicitModelId) return resolveProfile(explicitModelId, supabase, userId)
+
+  const { data } = await supabase
+    .from('ai_feature_bindings')
+    .select('profile_id')
+    .eq('owner_id', userId)
+    .eq('feature_id', featureId)
+    .maybeSingle()
+
+  return resolveProfile(String(data?.profile_id ?? ''), supabase, userId)
+}
+
+async function importEncryptionKey(secret: string) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(secret))
+  return crypto.subtle.importKey('raw', digest, 'AES-GCM', false, ['encrypt', 'decrypt'])
+}
+
+function bytesToBase64(bytes: Uint8Array) {
+  return btoa(String.fromCharCode(...bytes))
+}
+
+function base64ToBytes(value: string) {
+  return Uint8Array.from(atob(value), (char) => char.charCodeAt(0))
+}
+
+function getUserKeyEncryptionSecret() {
+  return Deno.env.get('AI_USER_KEY_ENCRYPTION_SECRET') ?? Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+}
+
+export async function encryptUserApiKey(apiKey: string) {
+  const secret = getUserKeyEncryptionSecret()
+  if (!secret) throw new Error('Missing AI_USER_KEY_ENCRYPTION_SECRET.')
+  const iv = crypto.getRandomValues(new Uint8Array(12))
+  const key = await importEncryptionKey(secret)
+  const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(apiKey))
+  return {
+    ciphertext: bytesToBase64(new Uint8Array(ciphertext)),
+    iv: bytesToBase64(iv),
+  }
+}
+
+export async function decryptUserApiKey(ciphertext: string, iv: string) {
+  const secret = getUserKeyEncryptionSecret()
+  if (!secret) throw new Error('Missing AI_USER_KEY_ENCRYPTION_SECRET.')
+  const key = await importEncryptionKey(secret)
+  const plaintext = await crypto.subtle.decrypt(
+    { name: 'AES-GCM', iv: base64ToBytes(iv) },
+    key,
+    base64ToBytes(ciphertext),
+  )
+  return new TextDecoder().decode(plaintext)
+}
+
+export function maskApiKey(apiKey: string) {
+  const trimmed = apiKey.trim()
+  if (trimmed.length <= 8) return '已保存'
+  return `${trimmed.slice(0, 3)}...${trimmed.slice(-4)}`
+}
+
+export async function resolveRuntimeProfile(profile: AiProfile): Promise<RuntimeProfile> {
   const apiKeyEnv = profile.apiKeyEnv ?? 'AI_API_KEY'
   const baseUrl = (
     profile.baseUrl ??
     Deno.env.get(profile.baseUrlEnv ?? 'AI_BASE_URL') ??
     'https://api.openai.com/v1'
   ).replace(/\/$/, '')
-  const apiKey = Deno.env.get(apiKeyEnv) ?? null
+  const apiKey = profile.source === 'user'
+    ? await decryptUserApiKey(String(profile.apiKeyCiphertext ?? ''), String(profile.apiKeyIv ?? ''))
+    : Deno.env.get(apiKeyEnv) ?? null
   let baseUrlHost = 'invalid-url'
 
   try {
@@ -128,8 +247,8 @@ export function resolveRuntimeProfile(profile: AiProfile): RuntimeProfile {
   }
 }
 
-export function toPublicProfile(profile: AiProfile): PublicAiProfile {
-  const runtime = resolveRuntimeProfile(profile)
+export async function toPublicProfile(profile: AiProfile): Promise<PublicAiProfile> {
+  const runtime = await resolveRuntimeProfile(profile)
   return {
     id: profile.id,
     label: profile.label,
@@ -138,6 +257,11 @@ export function toPublicProfile(profile: AiProfile): PublicAiProfile {
     enabled: profile.enabled,
     configured: runtime.configured,
     baseUrlHost: runtime.baseUrlHost,
+    source: profile.source ?? 'server',
+    userProviderId: profile.userProviderId,
+    keyHint: profile.source === 'user' ? profile.apiKeyHint ?? null : null,
+    supportsVision: profile.supportsVision,
+    supportsHtmlGeneration: profile.supportsHtmlGeneration,
   }
 }
 
@@ -170,7 +294,7 @@ export async function chatCompletion({
   maxTokens?: number
   timeoutMs?: number
 }) {
-  const { apiKey, apiKeyEnv, baseUrl } = resolveRuntimeProfile(profile)
+  const { apiKey, apiKeyEnv, baseUrl } = await resolveRuntimeProfile(profile)
   if (!apiKey) {
     throw new Error(`Missing API key secret: ${apiKeyEnv}`)
   }

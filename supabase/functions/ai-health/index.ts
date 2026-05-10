@@ -1,7 +1,7 @@
 import { corsHeaders, jsonResponse } from '../_shared/cors.ts'
 import {
   chatCompletion,
-  getProfiles,
+  getAvailableProfiles,
   requireUser,
   resolveRuntimeProfile,
   sanitizeAiError,
@@ -28,12 +28,12 @@ Deno.serve(async (req) => {
   const generatedAt = new Date().toISOString()
   try {
     const { supabase, user } = await requireUser(req)
-    const profiles = getProfiles()
+    const profiles = await getAvailableProfiles(supabase, user.id)
 
     const results = await Promise.all(
       profiles.map(async (profile): Promise<HealthProfile> => {
-        const publicProfile = toPublicProfile(profile)
-        const runtime = resolveRuntimeProfile(profile)
+        const publicProfile = await toPublicProfile(profile)
+        const runtime = await resolveRuntimeProfile(profile)
         const started = Date.now()
 
         if (!runtime.configured) {

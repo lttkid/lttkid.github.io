@@ -1,5 +1,5 @@
 import { corsHeaders, jsonResponse } from '../_shared/cors.ts'
-import { chatCompletion, requireUser, resolveProfile, sanitizeAiError } from '../_shared/ai.ts'
+import { chatCompletion, requireUser, resolveProfile, resolveProfileForFeature, sanitizeAiError } from '../_shared/ai.ts'
 
 type ExplainBody = {
   documentId: string
@@ -15,28 +15,30 @@ Deno.serve(async (req) => {
   let supabaseForLog: Awaited<ReturnType<typeof requireUser>>['supabase'] | null = null
   let userId: string | null = null
   let bodyForLog: Partial<ExplainBody> = {}
-  let profileForLog: ReturnType<typeof resolveProfile> | null = null
+  let profileForLog: Awaited<ReturnType<typeof resolveProfile>> | null = null
   try {
     const { supabase, user } = await requireUser(req)
     supabaseForLog = supabase
     userId = user.id
     const body = (await req.json()) as ExplainBody
     bodyForLog = body
-    const profile = resolveProfile(body.modelId)
+    const profile = await resolveProfileForFeature(supabase, user.id, 'explain', body.modelId)
     profileForLog = profile
     if (!profile) return jsonResponse({ error: 'No AI profile configured.' }, 500)
     if (!body.documentId || !body.selectedText?.trim()) return jsonResponse({ error: 'Missing documentId or selectedText.' }, 400)
 
-    const [{ data: document }, { data: persona }] = await Promise.all([
+    const [{ data: document, error: documentError }, { data: persona }] = await Promise.all([
       supabase.from('documents').select('id,title,summary').eq('id', body.documentId).single(),
       body.personaId ? supabase.from('personas').select('*').eq('id', body.personaId).single() : Promise.resolve({ data: null }),
     ])
+    if (documentError) throw documentError
 
     const systemPrompt =
       persona?.system_prompt ??
       '你是一个帮助用户阅读 HTML 文档的中文助手。解释时先给结论，再给上下文，避免编造文档外事实。'
     const answer = await chatCompletion({
       profile,
+      timeoutMs: 75000,
       messages: [
         {
           role: 'system',

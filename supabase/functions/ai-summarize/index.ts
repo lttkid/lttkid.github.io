@@ -1,8 +1,9 @@
 import { corsHeaders, jsonResponse } from '../_shared/cors.ts'
-import { chatCompletion, requireUser, resolveProfile, sanitizeAiError, stripHtml } from '../_shared/ai.ts'
+import { chatCompletion, requireUser, resolveProfile, resolveProfileForFeature, sanitizeAiError, stripHtml } from '../_shared/ai.ts'
 
 type SummaryBody = {
   documentId: string
+  personaId?: string
   modelId?: string
 }
 
@@ -13,23 +14,26 @@ Deno.serve(async (req) => {
   let supabaseForLog: Awaited<ReturnType<typeof requireUser>>['supabase'] | null = null
   let userId: string | null = null
   let bodyForLog: Partial<SummaryBody> = {}
-  let profileForLog: ReturnType<typeof resolveProfile> | null = null
+  let profileForLog: Awaited<ReturnType<typeof resolveProfile>> | null = null
   try {
     const { supabase, user } = await requireUser(req)
     supabaseForLog = supabase
     userId = user.id
     const body = (await req.json()) as SummaryBody
     bodyForLog = body
-    const profile = resolveProfile(body.modelId)
+    const profile = await resolveProfileForFeature(supabase, user.id, 'summarize', body.modelId)
     profileForLog = profile
     if (!profile) return jsonResponse({ error: 'No AI profile configured.' }, 500)
     if (!body.documentId) return jsonResponse({ error: 'Missing documentId.' }, 400)
 
-    const { data: document, error: documentError } = await supabase
-      .from('documents')
-      .select('id,title,storage_path')
-      .eq('id', body.documentId)
-      .single()
+    const [{ data: document, error: documentError }, { data: persona }] = await Promise.all([
+      supabase
+        .from('documents')
+        .select('id,title,storage_path')
+        .eq('id', body.documentId)
+        .single(),
+      body.personaId ? supabase.from('personas').select('id,tone,system_prompt').eq('id', body.personaId).single() : Promise.resolve({ data: null }),
+    ])
     if (documentError) throw documentError
 
     const { data: file, error: fileError } = await supabase.storage.from('html-docs').download(document.storage_path)
@@ -41,7 +45,10 @@ Deno.serve(async (req) => {
       messages: [
         {
           role: 'system',
-          content: '你是一个中文阅读助手。请输出 120 字以内摘要，并附上 3 到 6 个关键词。',
+          content: [
+            persona?.system_prompt ?? '你是一个中文阅读助手。请输出 120 字以内摘要，并附上 3 到 6 个关键词。',
+            `语气要求：${persona?.tone ?? '清晰、准确、简洁'}`,
+          ].join('\n'),
         },
         {
           role: 'user',
@@ -55,6 +62,7 @@ Deno.serve(async (req) => {
       supabase.from('ai_requests').insert({
         owner_id: user.id,
         document_id: body.documentId,
+        persona_id: body.personaId ?? null,
         request_type: 'summarize',
         provider: profile.provider,
         model: profile.model,
@@ -70,6 +78,7 @@ Deno.serve(async (req) => {
       await supabaseForLog.from('ai_requests').insert({
         owner_id: userId,
         document_id: bodyForLog.documentId ?? null,
+        persona_id: bodyForLog.personaId ?? null,
         request_type: 'summarize',
         provider: profileForLog.provider,
         model: profileForLog.model,

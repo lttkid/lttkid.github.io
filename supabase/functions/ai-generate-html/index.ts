@@ -1,5 +1,5 @@
 import { corsHeaders, jsonResponse } from '../_shared/cors.ts'
-import { chatCompletion, requireUser, resolveProfile, sanitizeAiError } from '../_shared/ai.ts'
+import { chatCompletion, requireUser, resolveProfile, resolveProfileForFeature, sanitizeAiError } from '../_shared/ai.ts'
 
 type HtmlGenerationType = 'learning' | 'animation' | 'interactive' | 'game' | 'general'
 type HtmlGenerationMode = 'create' | 'revise'
@@ -73,7 +73,7 @@ Deno.serve(async (req) => {
   let supabaseForLog: Awaited<ReturnType<typeof requireUser>>['supabase'] | null = null
   let userId: string | null = null
   let bodyForLog: Partial<GenerateBody> = {}
-  let profileForLog: ReturnType<typeof resolveProfile> | null = null
+  let profileForLog: Awaited<ReturnType<typeof resolveProfile>> | null = null
 
   try {
     const { supabase, user } = await requireUser(req)
@@ -81,7 +81,12 @@ Deno.serve(async (req) => {
     userId = user.id
     const body = (await req.json()) as GenerateBody
     bodyForLog = body
-    const profile = resolveProfile(body.modelId)
+    const profile = await resolveProfileForFeature(
+      supabase,
+      user.id,
+      body.image ? 'image_question' : 'generate_html',
+      body.modelId,
+    )
     profileForLog = profile
     if (!profile) return jsonResponse({ error: 'No AI profile configured.' }, 500)
 
@@ -285,7 +290,7 @@ async function validateOrRepairGeneratedHtml({
   userPrompt,
 }: {
   answer: string
-  profile: ReturnType<typeof resolveProfile>
+  profile: Awaited<ReturnType<typeof resolveProfile>>
   systemPrompt: string
   userPrompt: string
 }) {
