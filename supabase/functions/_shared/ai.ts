@@ -59,6 +59,7 @@ export type PublicAiProfile = {
   keyHint?: string | null
   supportsVision?: boolean
   supportsHtmlGeneration?: boolean
+  configurationError?: string | null
 }
 
 export type AiFeatureId = 'summarize' | 'explain' | 'generate_html' | 'image_question' | 'persona_chat'
@@ -414,11 +415,24 @@ export async function resolveRuntimeProfile(profile: AiProfile): Promise<Runtime
     Deno.env.get(profile.baseUrlEnv ?? 'AI_BASE_URL') ??
     'https://api.openai.com/v1'
   ).replace(/\/$/, '')
-  const apiKey = profile.apiKeyOverride
-    ? profile.apiKeyOverride
-    : profile.source === 'user'
-    ? await decryptUserApiKey(String(profile.apiKeyCiphertext ?? ''), String(profile.apiKeyIv ?? ''))
-    : Deno.env.get(apiKeyEnv) ?? null
+  let apiKey: string | null = null
+
+  if (profile.apiKeyOverride) {
+    apiKey = profile.apiKeyOverride
+  } else if (profile.source === 'user') {
+    try {
+      apiKey = await decryptUserApiKey(String(profile.apiKeyCiphertext ?? ''), String(profile.apiKeyIv ?? ''))
+    } catch {
+      throw new AiFunctionError(
+        'PROVIDER_AUTH_FAILED',
+        'Unable to decrypt saved Provider API key. Please edit this Provider and save the API key again.',
+        400,
+      )
+    }
+  } else {
+    apiKey = Deno.env.get(apiKeyEnv) ?? null
+  }
+
   let baseUrlHost = 'invalid-url'
 
   try {
@@ -438,21 +452,55 @@ export async function resolveRuntimeProfile(profile: AiProfile): Promise<Runtime
 }
 
 export async function toPublicProfile(profile: AiProfile): Promise<PublicAiProfile> {
-  const runtime = await resolveRuntimeProfile(profile)
-  return {
-    id: profile.id,
-    label: profile.label,
-    provider: profile.provider,
-    model: profile.model,
-    enabled: profile.enabled,
-    configured: runtime.configured,
-    baseUrl: runtime.baseUrl,
-    baseUrlHost: runtime.baseUrlHost,
-    source: profile.source ?? 'server',
-    userProviderId: profile.userProviderId,
-    keyHint: profile.source === 'user' ? profile.apiKeyHint ?? null : null,
-    supportsVision: profile.supportsVision,
-    supportsHtmlGeneration: profile.supportsHtmlGeneration,
+  try {
+    const runtime = await resolveRuntimeProfile(profile)
+    return {
+      id: profile.id,
+      label: profile.label,
+      provider: profile.provider,
+      model: profile.model,
+      enabled: profile.enabled,
+      configured: runtime.configured,
+      baseUrl: runtime.baseUrl,
+      baseUrlHost: runtime.baseUrlHost,
+      source: profile.source ?? 'server',
+      userProviderId: profile.userProviderId,
+      keyHint: profile.source === 'user' ? profile.apiKeyHint ?? null : null,
+      supportsVision: profile.supportsVision,
+      supportsHtmlGeneration: profile.supportsHtmlGeneration,
+      configurationError: null,
+    }
+  } catch (error) {
+    const baseUrl = (
+      profile.baseUrl ??
+      Deno.env.get(profile.baseUrlEnv ?? 'AI_BASE_URL') ??
+      'https://api.openai.com/v1'
+    ).replace(/\/$/, '')
+    let baseUrlHost = 'invalid-url'
+
+    try {
+      baseUrlHost = new URL(baseUrl).host
+    } catch {
+      baseUrlHost = 'invalid-url'
+    }
+
+    console.warn(`AI profile ${profile.id} is not configurable: ${sanitizeAiError(error)}`)
+    return {
+      id: profile.id,
+      label: profile.label,
+      provider: profile.provider,
+      model: profile.model,
+      enabled: profile.enabled,
+      configured: false,
+      baseUrl,
+      baseUrlHost,
+      source: profile.source ?? 'server',
+      userProviderId: profile.userProviderId,
+      keyHint: profile.source === 'user' ? profile.apiKeyHint ?? null : null,
+      supportsVision: profile.supportsVision,
+      supportsHtmlGeneration: profile.supportsHtmlGeneration,
+      configurationError: sanitizeAiError(error),
+    }
   }
 }
 

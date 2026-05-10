@@ -3864,6 +3864,7 @@ function AiConfigCenter({
                   ) : null}
                   {healthProfile ? <span>检查：{formatDateTime(healthProfile.checkedAt)}</span> : null}
                 </div>
+                {profile.configurationError ? <p className="ai-profile-error">此 API 密钥需要重新保存：{profile.configurationError}</p> : null}
                 {healthProfile?.error ? <p className="ai-profile-error">{healthProfile.error}</p> : null}
                 {profile.source === 'user' ? (
                   <div className="ai-profile-actions">

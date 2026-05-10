@@ -33,8 +33,38 @@ Deno.serve(async (req) => {
     const results = await Promise.all(
       profiles.map(async (profile): Promise<HealthProfile> => {
         const publicProfile = await toPublicProfile(profile)
-        const runtime = await resolveRuntimeProfile(profile)
         const started = Date.now()
+        let runtime: Awaited<ReturnType<typeof resolveRuntimeProfile>>
+
+        try {
+          runtime = await resolveRuntimeProfile(profile)
+        } catch (error) {
+          const payload = errorPayload(error)
+          await supabase.from('ai_requests').insert({
+            owner_id: user.id,
+            request_type: 'health_check',
+            feature_id: 'health_check',
+            provider: profile.provider,
+            model: profile.model,
+            used_model: profile.model,
+            profile_id: profile.id,
+            provider_id: profile.userProviderId ?? profile.id,
+            profile_source: profile.source ?? 'server',
+            status: 'error',
+            error_code: payload.code,
+            error_message: payload.error,
+            latency_ms: Date.now() - started,
+            created_at: generatedAt,
+          })
+
+          return {
+            ...publicProfile,
+            status: 'fail',
+            latencyMs: Date.now() - started,
+            checkedAt: generatedAt,
+            error: payload.error,
+          }
+        }
 
         if (!runtime.configured) {
           const error = runtime.baseUrlHost === 'invalid-url'

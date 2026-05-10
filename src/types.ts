@@ -162,6 +162,7 @@ export interface AiProfile {
   keyHint?: string | null
   supportsVision?: boolean
   supportsHtmlGeneration?: boolean
+  configurationError?: string | null
 }
 
 export type AiModelCapability = 'text' | 'vision' | 'long_context' | 'html'
