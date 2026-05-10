@@ -6,6 +6,9 @@ verify_jwt = true
 [functions.ai-health]
 verify_jwt = true
 
+[functions.ai-feature-config]
+verify_jwt = true
+
 [functions.ai-explain]
 verify_jwt = true
 

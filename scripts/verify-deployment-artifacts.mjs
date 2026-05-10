@@ -11,6 +11,7 @@ const requiredFiles = [
   'supabase/migrations/002_tighten_document_relation_rls.sql',
   'supabase/functions/ai-profiles/index.ts',
   'supabase/functions/ai-health/index.ts',
+  'supabase/functions/ai-feature-config/index.ts',
   'supabase/functions/ai-explain/index.ts',
   'supabase/functions/ai-summarize/index.ts',
   'supabase/functions/ai-generate-html/index.ts',
@@ -43,7 +44,7 @@ check('Pages deploys dist', pagesWorkflow.includes('actions/deploy-pages') && pa
 check('Pages uses public env only', pagesWorkflow.includes('VITE_SUPABASE_URL') && pagesWorkflow.includes('VITE_SUPABASE_ANON_KEY'), 'Frontend build should only receive anon Supabase config.')
 
 const supabaseWorkflow = readIfExists('.github/workflows/deploy-supabase.yml')
-check('Supabase workflow deploys all functions', ['ai-profiles', 'ai-health', 'ai-explain', 'ai-summarize', 'ai-generate-html'].every((name) => supabaseWorkflow.includes(`functions deploy ${name}`)), 'All Edge Functions used by the app must be deployed.')
+check('Supabase workflow deploys all functions', ['ai-profiles', 'ai-health', 'ai-feature-config', 'ai-explain', 'ai-summarize', 'ai-generate-html'].every((name) => supabaseWorkflow.includes(`functions deploy ${name}`)), 'All Edge Functions used by the app must be deployed.')
 check('Supabase workflow requires access token', supabaseWorkflow.includes('SUPABASE_ACCESS_TOKEN'), 'Backend deploys must use a GitHub secret access token.')
 
 const contentWorkflow = readIfExists('templates/content-repo/.github/workflows/sync-html.yml')
@@ -56,6 +57,12 @@ check('Migration enables RLS', migration.includes('enable row level security'), 
 
 const relationRlsMigration = readIfExists('supabase/migrations/002_tighten_document_relation_rls.sql')
 check('Relation RLS migration validates document ownership', relationRlsMigration.includes('documents.owner_id = auth.uid()'), 'Child rows must not reference another user document.')
+
+const aiFeatureMigration = readIfExists('supabase/migrations/007_ai_feature_bindings.sql')
+check('AI feature binding migration exists', aiFeatureMigration.includes('ai_feature_bindings') && aiFeatureMigration.includes('enable row level security'), 'Per-feature AI bindings must be stored behind owner RLS.')
+
+const aiUserProvidersMigration = readIfExists('supabase/migrations/008_ai_user_providers.sql')
+check('AI user provider migration exists', aiUserProvidersMigration.includes('ai_user_providers') && aiUserProvidersMigration.includes('api_key_ciphertext') && aiUserProvidersMigration.includes('enable row level security'), 'User API keys must be encrypted server-side and protected by owner RLS.')
 
 const packageJson = readIfExists('package.json')
 check('Live Supabase verification script exists', packageJson.includes('supabase:live:init'), 'A real Supabase initializer/verifier command should be available.')
