@@ -111,7 +111,7 @@ Deno.serve(async (req) => {
     return jsonResponse(await buildPayload(supabase, user.id))
   } catch (error) {
     if (error instanceof Response) return error
-    return jsonResponse({ error: sanitizeAiError(error) }, 500)
+    return jsonResponse(errorPayload(error), 500)
   }
 })
 

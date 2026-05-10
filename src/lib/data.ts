@@ -1018,6 +1018,12 @@ type AiFunctionErrorBody = {
   suggestion?: string
 }
 
+function formatSettledError(result: PromiseRejectedResult, fallback: string) {
+  const reason = result.reason
+  const message = reason instanceof Error ? reason.message : String(reason ?? '')
+  return message ? `${fallback} 实际错误：${message}` : fallback
+}
+
 async function translateFunctionError(error: unknown, fallbackCode: string) {
   const rawMessage = error instanceof Error ? error.message : String(error)
   const context = (error as { context?: unknown })?.context
@@ -1059,7 +1065,7 @@ function aiClientSuggestion(code: string) {
     AI_BINDING_SAVE_FAILED: '功能绑定没有保存成功，请刷新配置中心后重试。',
     AI_PROVIDER_SAVE_FAILED: 'API 平台没有保存成功，请检查 Base URL、模型名和 Key。',
     AI_PROVIDER_DELETE_FAILED: 'API 平台没有删除成功，请刷新后重试。',
-    AI_FEATURE_CONFIG_FAILED: '请确认 ai-feature-config 已部署并且 migrations 已应用。',
+    AI_FEATURE_CONFIG_FAILED: '请刷新页面重试；若仍失败，请检查登录态、ai-feature-config 函数日志、migrations，以及是否存在需要重新保存的用户 API Key。',
     AI_HEALTH_FAILED: '请确认 ai-health 已部署，并检查 Supabase 登录态。',
   }
   return suggestions[code] ?? '请查看部署中心 AI 健康检查与 ai_requests 日志定位原因。'
@@ -1656,7 +1662,7 @@ export async function runClientPreflight(user: AppUser | null): Promise<ClientPr
       detail:
         featureConfig.status === 'fulfilled'
           ? `配置中心已读取 ${featureConfig.value.features.length} 个 AI 功能绑定项。`
-          : '无法读取 AI 功能配置中心，请确认 ai-feature-config 已部署。',
+          : formatSettledError(featureConfig, '无法读取 AI 功能配置中心。'),
     },
   )
 
