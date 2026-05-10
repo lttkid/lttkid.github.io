@@ -92,7 +92,7 @@ Deno.serve(async (req) => {
       body.modelId,
     )
     profileForLog = profile
-    if (!profile) return jsonResponse({ error: 'No AI profile configured.' }, 500)
+    if (!profile) return jsonResponse({ error: 'No AI profile configured.', code: 'MODEL_NOT_CONFIGURED', suggestion: '请先在 API 配置中心添加并绑定一个 AI 服务配置。' }, 400)
 
     const normalized = normalizeBody(body)
     const featureId = normalized.image ? 'image_question' : 'generate_html'

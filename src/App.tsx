@@ -1,5 +1,6 @@
 import { AnimatePresence, motion, type Variants } from 'framer-motion'
 import {
+  AlertTriangle,
   Archive,
   ArrowDown,
   ArrowUp,
@@ -16,6 +17,7 @@ import {
   Heart,
   Highlighter,
   ImagePlus,
+  Info,
   Keyboard,
   Library,
   Loader2,
@@ -45,6 +47,7 @@ import {
   X,
 } from 'lucide-react'
 import {
+  Component,
   type ComponentType,
   type CSSProperties,
   type FormEvent,
@@ -673,6 +676,17 @@ export default function App() {
   const [archiveLoading, setArchiveLoading] = useState(false)
   const [loadError, setLoadError] = useState('')
   const [refreshing, setRefreshing] = useState(false)
+  const [toasts, setToasts] = useState<ToastItem[]>([])
+
+  const showToast = useCallback((tone: ToastTone, message: string) => {
+    const id = `toast-${++toastIdCounter}`
+    setToasts((current) => [...current, { id, tone, message }])
+    setTimeout(() => setToasts((current) => current.filter((t) => t.id !== id)), 4000)
+  }, [])
+
+  const dismissToast = useCallback((id: string) => {
+    setToasts((current) => current.filter((t) => t.id !== id))
+  }, [])
 
   const refresh = useCallback(async () => {
     if (!auth.user) return
@@ -714,8 +728,9 @@ export default function App() {
     )
     try {
       await toggleDocumentFavorite(document, favorite)
+      showToast('success', favorite ? '已添加收藏' : '已取消收藏')
     } catch (error) {
-      setLoadError(error instanceof Error ? error.message : '收藏状态更新失败。')
+      showToast('error', error instanceof Error ? error.message : '收藏状态更新失败。')
       void refresh()
     }
   }
@@ -731,6 +746,7 @@ export default function App() {
           }
         : current,
     )
+    showToast('success', '分类已创建')
   }
 
   const handleUploadDocuments = async (files: File[], categoryId: string | null) => {
@@ -738,9 +754,11 @@ export default function App() {
     const results = await uploadHtmlFiles(auth.user, files, categoryId)
     if (results.some((result) => result.status === 'uploaded')) {
       dispatchCompanionStatus({ state: 'success', message: '上传完成，资料库已更新。' })
+      showToast('success', '上传完成，资料库已更新')
       await refresh()
     } else if (results.some((result) => result.status === 'failed')) {
       dispatchCompanionStatus({ state: 'warning', message: '有文件上传失败，可以原地重试。' })
+      showToast('warning', '有文件上传失败，可以原地重试')
     }
     return results
   }
@@ -749,6 +767,7 @@ export default function App() {
     if (!auth.user) throw new Error('请先登录后再保存生成结果。')
     const result = await saveGeneratedHtml(auth.user, draft)
     dispatchCompanionStatus({ state: 'success', message: '生成结果已保存进资料库。' })
+    showToast('success', '生成结果已保存进资料库')
     await refresh()
     return result
   }
@@ -779,12 +798,13 @@ export default function App() {
     )
     if (draft.archived) {
       setArchivedDocuments((current) => [updatedDocument, ...current.filter((item) => item.id !== document.id)])
+      showToast('success', '已移至归档')
     }
 
     try {
       await updateDocumentManagement(document, draft)
     } catch (error) {
-      setLoadError(error instanceof Error ? error.message : '文档更新失败。')
+      showToast('error', error instanceof Error ? error.message : '文档更新失败。')
       void refresh()
     }
   }
@@ -827,7 +847,7 @@ export default function App() {
     try {
       await updateDocumentSortOrder(updates)
     } catch (error) {
-      setLoadError(error instanceof Error ? error.message : '排序保存失败。')
+      showToast('error', error instanceof Error ? error.message : '排序保存失败。')
       void refresh()
     }
   }
@@ -859,8 +879,9 @@ export default function App() {
 
     try {
       await restoreDocument(document)
+      showToast('success', '文档已恢复')
     } catch (error) {
-      setLoadError(error instanceof Error ? error.message : '恢复归档失败。')
+      showToast('error', error instanceof Error ? error.message : '恢复归档失败。')
       void refresh()
       void handleLoadArchived()
     }
@@ -879,6 +900,7 @@ export default function App() {
           }
         : current,
     )
+    showToast('success', persona ? '人物已更新' : '人物已创建')
   }
 
   const handleProgress = useCallback((documentId: string, lastScroll: number) => {
@@ -902,7 +924,7 @@ export default function App() {
             lastReadAt: document.last_read_at!,
             progress: Math.min(1, Math.max(0, document.last_scroll ?? 0)),
             categoryName: document.category?.name ?? '未分类',
-            categoryColor: document.category?.color ?? '#64748B',
+            categoryColor: document.category?.color ?? 'var(--muted)',
             estimateMinutes: document.reading_estimate_minutes ?? 1,
           }))
 
@@ -926,81 +948,88 @@ export default function App() {
   }
 
   return (
-    <AppShell
-      user={auth.user}
-      route={route}
-      onNavigate={navigate}
-      onSignOut={auth.signOut}
-      onUpdateProfile={auth.updateProfile}
-      onRefresh={refresh}
-      activeDocument={selectedDocument}
-      personas={payload?.personas ?? []}
-      onFavorite={handleFavorite}
-      refreshing={refreshing}
-    >
-      {loadError ? <InlineNotice tone="danger" title="加载遇到问题" body={loadError} /> : null}
-      {!payload ? (
-        <LoadingScreen compact />
-      ) : route.view === 'reader' && selectedDocument ? (
-        <ReaderView
-          user={auth.user}
-          document={selectedDocument}
-          personas={payload.personas}
-          aiProfiles={payload.aiProfiles}
-          onBack={() => navigate('library')}
-          onFavorite={handleFavorite}
-          onProgress={handleProgress}
-        />
-      ) : route.view === 'stats' ? (
-        <StatsView payload={payload} />
-      ) : route.view === 'generator' ? (
-        <GeneratorView
-          user={auth.user}
-          categories={payload.categories}
-          personas={payload.personas}
-          aiProfiles={payload.aiProfiles}
-          onSave={handleSaveGeneratedHtml}
-          onOpenDocument={(document) => navigate('reader', document.id)}
-        />
-      ) : route.view === 'notes' ? (
-        <NotesView documents={payload.documents} categories={payload.categories} onOpenDocument={(id) => navigate('reader', id)} />
-      ) : route.view === 'personas' ? (
-        <PersonasView personas={payload.personas} aiProfiles={payload.aiProfiles} onSave={handleSavePersona} />
-      ) : route.view === 'api-config' ? (
-        <DeployCenter
-          page="api-config"
-          user={auth.user}
-          aiProfiles={payload.aiProfiles}
-          aiRequestBreakdown={payload.aiRequestBreakdown}
-          onOpenApiConfig={() => navigate('api-config')}
-          onOpenDeploy={() => navigate('deploy')}
-        />
-      ) : route.view === 'deploy' ? (
-        <DeployCenter
-          page="deploy"
-          user={auth.user}
-          aiProfiles={payload.aiProfiles}
-          aiRequestBreakdown={payload.aiRequestBreakdown}
-          onOpenApiConfig={() => navigate('api-config')}
-          onOpenDeploy={() => navigate('deploy')}
-        />
-      ) : (
-        <LibraryView
-          payload={payload}
-          archivedDocuments={archivedDocuments}
-          archiveLoading={archiveLoading}
-          onOpen={(document) => navigate('reader', document.id)}
-          onFavorite={handleFavorite}
-          onCreateCategory={handleCreateCategory}
-          onUpload={handleUploadDocuments}
-          onOpenGenerator={() => navigate('generator')}
-          onUpdateDocument={handleUpdateDocument}
-          onReorderDocuments={handleReorderDocuments}
-          onLoadArchived={handleLoadArchived}
-          onRestoreDocument={handleRestoreDocument}
-        />
-      )}
-    </AppShell>
+    <>
+      <AppShell
+        user={auth.user}
+        route={route}
+        onNavigate={navigate}
+        onSignOut={auth.signOut}
+        onUpdateProfile={auth.updateProfile}
+        onRefresh={refresh}
+        activeDocument={selectedDocument}
+        personas={payload?.personas ?? []}
+        onFavorite={handleFavorite}
+        refreshing={refreshing}
+      >
+        {loadError ? <InlineNotice tone="danger" title="加载遇到问题" body={loadError} /> : null}
+        {!payload ? (
+          <SkeletonList count={8} />
+        ) : route.view === 'reader' && selectedDocument ? (
+          <ErrorBoundary fallbackLabel="阅读器">
+            <ReaderView
+              user={auth.user}
+              document={selectedDocument}
+              personas={payload.personas}
+              aiProfiles={payload.aiProfiles}
+              onBack={() => navigate('library')}
+              onFavorite={handleFavorite}
+              onProgress={handleProgress}
+            />
+          </ErrorBoundary>
+        ) : route.view === 'stats' ? (
+          <StatsView payload={payload} />
+        ) : route.view === 'generator' ? (
+          <ErrorBoundary fallbackLabel="AI 生成">
+            <GeneratorView
+              user={auth.user}
+              categories={payload.categories}
+              personas={payload.personas}
+              aiProfiles={payload.aiProfiles}
+              onSave={handleSaveGeneratedHtml}
+              onOpenDocument={(document) => navigate('reader', document.id)}
+              onOpenApiConfig={() => navigate('api-config')}
+            />
+          </ErrorBoundary>
+        ) : route.view === 'notes' ? (
+          <NotesView documents={payload.documents} categories={payload.categories} onOpenDocument={(id) => navigate('reader', id)} />
+        ) : route.view === 'personas' ? (
+          <PersonasView personas={payload.personas} aiProfiles={payload.aiProfiles} onSave={handleSavePersona} />
+        ) : route.view === 'api-config' ? (
+          <ErrorBoundary fallbackLabel="API 配置">
+            <ApiConfigView
+              aiProfiles={payload.aiProfiles}
+              aiRequestBreakdown={payload.aiRequestBreakdown}
+              onOpenDeploy={() => navigate('deploy')}
+            />
+          </ErrorBoundary>
+        ) : route.view === 'deploy' ? (
+          <ErrorBoundary fallbackLabel="部署中心">
+            <DeployCenter
+              user={auth.user}
+              aiProfiles={payload.aiProfiles}
+              aiRequestBreakdown={payload.aiRequestBreakdown}
+              onOpenApiConfig={() => navigate('api-config')}
+            />
+          </ErrorBoundary>
+        ) : (
+          <LibraryView
+            payload={payload}
+            archivedDocuments={archivedDocuments}
+            archiveLoading={archiveLoading}
+            onOpen={(document) => navigate('reader', document.id)}
+            onFavorite={handleFavorite}
+            onCreateCategory={handleCreateCategory}
+            onUpload={handleUploadDocuments}
+            onOpenGenerator={() => navigate('generator')}
+            onUpdateDocument={handleUpdateDocument}
+            onReorderDocuments={handleReorderDocuments}
+            onLoadArchived={handleLoadArchived}
+            onRestoreDocument={handleRestoreDocument}
+          />
+        )}
+      </AppShell>
+      <ToastContainer toasts={toasts} onDismiss={dismissToast} />
+    </>
   )
 }
 
@@ -1011,6 +1040,102 @@ function LoadingScreen({ compact = false }: { compact?: boolean }) {
       <span>正在准备阅读空间</span>
     </div>
   )
+}
+
+function SkeletonCard({ lines = 3 }: { lines?: number }) {
+  return (
+    <div className="skeleton-card">
+      <div className="skeleton-line title" />
+      {Array.from({ length: lines - 1 }, (_, i) => (
+        <div key={i} className={`skeleton-line ${i % 2 === 0 ? 'medium' : 'short'}`} />
+      ))}
+    </div>
+  )
+}
+
+function SkeletonList({ count = 6, compact = false, lines = 3 }: { count?: number; compact?: boolean; lines?: number }) {
+  return (
+    <div className={compact ? 'skeleton-list compact' : 'skeleton-list'}>
+      {Array.from({ length: count }, (_, i) => (
+        <SkeletonCard key={i} lines={lines} />
+      ))}
+    </div>
+  )
+}
+
+function EmptyState({ icon, title, description, compact = false }: { icon: React.ReactNode; title: string; description: string; compact?: boolean }) {
+  return (
+    <div className={compact ? 'empty-state compact' : 'empty-state'}>
+      {icon}
+      <strong>{title}</strong>
+      <p>{description}</p>
+    </div>
+  )
+}
+
+type ToastTone = 'success' | 'error' | 'warning' | 'info'
+interface ToastItem { id: string; tone: ToastTone; message: string }
+let toastIdCounter = 0
+
+function ToastContainer({ toasts, onDismiss }: { toasts: ToastItem[]; onDismiss: (id: string) => void }) {
+  return createPortal(
+    <div className="toast-container">
+      <AnimatePresence mode="popLayout">
+        {toasts.map((toast) => (
+          <motion.div
+            key={toast.id}
+            className="toast-item"
+            data-tone={toast.tone}
+            initial={{ opacity: 0, y: 40, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, x: 80, scale: 0.95 }}
+            transition={{ duration: 0.25, ease: 'easeOut' }}
+            layout
+          >
+            <span className="toast-icon">
+              {toast.tone === 'success' ? <Check size={13} /> :
+               toast.tone === 'error' ? <X size={13} /> :
+               toast.tone === 'warning' ? <AlertTriangle size={13} /> :
+               <Info size={13} />}
+            </span>
+            <span className="toast-body">{toast.message}</span>
+            <button className="toast-close" onClick={() => onDismiss(toast.id)}>
+              <X size={14} />
+            </button>
+          </motion.div>
+        ))}
+      </AnimatePresence>
+    </div>,
+    document.body,
+  )
+}
+
+class ErrorBoundary extends Component<{ fallbackLabel: string; children: ReactNode }, { error: Error | null }> {
+  state: { error: Error | null } = { error: null }
+
+  static getDerivedStateFromError(error: Error) {
+    return { error }
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="empty-state">
+          <ShieldCheck size={36} style={{ color: 'var(--muted)', marginBottom: 4 }} />
+          <strong>{this.props.fallbackLabel}加载异常</strong>
+          <p style={{ color: 'var(--muted)', fontSize: 13 }}>{this.state.error.message}</p>
+          <button
+            className="btn secondary"
+            style={{ marginTop: 8 }}
+            onClick={() => this.setState({ error: null })}
+          >
+            重试
+          </button>
+        </div>
+      )
+    }
+    return this.props.children
+  }
 }
 
 function LoginPage({
@@ -1128,14 +1253,24 @@ function AppShell({
   const [profileEditorOpen, setProfileEditorOpen] = useState(false)
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => getStoredThemeMode())
   const [pinnedActions, setPinnedActions] = useState<TabDockActionId[]>(() => getStoredPinnedActions())
-  const navItems = [
-    { view: 'library' as AppView, label: '资料库', icon: Library },
-    { view: 'generator' as AppView, label: 'AI 生成', icon: Sparkles },
-    { view: 'api-config' as AppView, label: 'API 配置', icon: Settings2 },
-    { view: 'notes' as AppView, label: '笔记', icon: NotebookPen },
-    { view: 'stats' as AppView, label: '统计', icon: BarChart3 },
-    { view: 'personas' as AppView, label: '人物', icon: BrainCircuit },
-    { view: 'deploy' as AppView, label: '部署', icon: Server },
+  const navGroups = [
+    {
+      label: '内容',
+      items: [
+        { view: 'library' as AppView, label: '资料库', icon: Library },
+        { view: 'generator' as AppView, label: 'AI 生成', icon: Sparkles },
+        { view: 'notes' as AppView, label: '笔记', icon: NotebookPen },
+      ],
+    },
+    {
+      label: '管理',
+      items: [
+        { view: 'api-config' as AppView, label: 'API 配置', icon: Settings2 },
+        { view: 'stats' as AppView, label: '统计', icon: BarChart3 },
+        { view: 'personas' as AppView, label: '人物', icon: BrainCircuit },
+        { view: 'deploy' as AppView, label: '部署', icon: Server },
+      ],
+    },
   ]
   const themeIcon = themeMode === 'dark' ? Moon : themeMode === 'light' ? Sun : Monitor
 
@@ -1350,16 +1485,21 @@ function AppShell({
           </div>
         </div>
         <nav className="nav-list" aria-label="主导航">
-          {navItems.map((item) => {
-            const Icon = item.icon
-            const active = route.view === item.view
-            return (
-              <button key={item.view} className={active ? 'nav-item active' : 'nav-item'} onClick={() => onNavigate(item.view)}>
-                <Icon size={18} />
-                {item.label}
-              </button>
-            )
-          })}
+          {navGroups.map((group) => (
+            <div key={group.label}>
+              <span className="nav-group-label">{group.label}</span>
+              {group.items.map((item) => {
+                const Icon = item.icon
+                const active = route.view === item.view
+                return (
+                  <button key={item.view} className={active ? 'nav-item active' : 'nav-item'} onClick={() => onNavigate(item.view)}>
+                    <Icon size={18} />
+                    {item.label}
+                  </button>
+                )
+              })}
+            </div>
+          ))}
         </nav>
         <div className="sidebar-footer">
           <button className="account-card" type="button" onClick={() => setProfileEditorOpen(true)} aria-label="用户资料">
@@ -1826,6 +1966,7 @@ function GeneratorView({
   aiProfiles,
   onSave,
   onOpenDocument,
+  onOpenApiConfig,
 }: {
   user: AppUser
   categories: Category[]
@@ -1833,6 +1974,7 @@ function GeneratorView({
   aiProfiles: AiProfile[]
   onSave: (draft: GeneratedHtmlSaveDraft) => Promise<GeneratedHtmlSaveResult>
   onOpenDocument: (document: DocumentRecord) => void
+  onOpenApiConfig?: () => void
 }) {
   const [type, setType] = useState<HtmlGenerationType>('learning')
   const [brief, setBrief] = useState('')
@@ -2123,7 +2265,14 @@ function GeneratorView({
             </button>
           </div>
 
-          {error ? <InlineNotice tone="danger" title="生成器遇到问题" body={error} /> : null}
+          {error ? (
+            <div>
+              <InlineNotice tone="danger" title="生成器遇到问题" body={error} />
+              {error.includes('MODEL_NOT_CONFIGURED') && onOpenApiConfig ? (
+                <button className="secondary-button" type="button" style={{ marginTop: 8 }} onClick={onOpenApiConfig}>前往 API 配置中心</button>
+              ) : null}
+            </div>
+          ) : null}
           {status ? <InlineNotice tone="success" title="生成器状态" body={status} /> : null}
         </section>
 
@@ -2530,11 +2679,11 @@ function LibraryView({
         ))}
       </motion.div>
       {filteredDocuments.length === 0 ? (
-        <div className="empty-state">
-          <Archive size={22} />
-          <strong>{archiveMode ? '暂无归档文档' : '没有匹配的文档'}</strong>
-          <p>{archiveMode ? '被归档的资料会显示在这里，可以随时恢复。' : '换个关键词或分类再试试。'}</p>
-        </div>
+        <EmptyState
+          icon={<Archive size={22} />}
+          title={archiveMode ? '暂无归档文档' : '没有匹配的文档'}
+          description={archiveMode ? '被归档的资料会显示在这里，可以随时恢复。' : '换个关键词或分类再试试。'}
+        />
       ) : null}
 
       <AnimatePresence>
@@ -2789,7 +2938,7 @@ function DocumentCard({
             <GripVertical size={17} />
           </span>
         ) : null}
-        <span className="category-dot" style={{ backgroundColor: document.category?.color ?? '#64748B' }} />
+        <span className="category-dot" style={{ backgroundColor: document.category?.color ?? 'var(--muted)' }} />
         <span>{document.category?.name ?? '未分类'}</span>
         <span className="source-badge">{sourceLabel}</span>
         {onRestore ? (
@@ -3030,7 +3179,7 @@ function StatsView({ payload }: { payload: LibraryPayload }) {
       reason: document.favorite && !document.last_read_at ? '收藏未读' : !document.last_read_at ? '尚未开始' : '继续阅读',
       progress: Math.min(1, Math.max(0, document.last_scroll ?? 0)),
       categoryName: document.category?.name ?? '未分类',
-      categoryColor: document.category?.color ?? '#64748B',
+      categoryColor: document.category?.color ?? 'var(--muted)',
       estimateMinutes: document.reading_estimate_minutes ?? 1,
       favorite: document.favorite,
       lastReadAt: document.last_read_at,
@@ -3045,7 +3194,7 @@ function StatsView({ payload }: { payload: LibraryPayload }) {
       lastReadAt: document.last_read_at!,
       progress: Math.min(1, Math.max(0, document.last_scroll ?? 0)),
       categoryName: document.category?.name ?? '未分类',
-      categoryColor: document.category?.color ?? '#64748B',
+      categoryColor: document.category?.color ?? 'var(--muted)',
       estimateMinutes: document.reading_estimate_minutes ?? 1,
     }))
   const progressBuckets = stats.progressBuckets ?? fallbackProgressBuckets
@@ -3135,11 +3284,7 @@ function StatsView({ payload }: { payload: LibraryPayload }) {
             <span>{backlogDocuments.length} 项</span>
           </div>
           {backlogDocuments.length === 0 ? (
-            <div className="empty-state compact">
-              <Check size={22} />
-              <strong>当前没有待读积压</strong>
-              <p>新上传或未完成的文档会出现在这里。</p>
-            </div>
+            <EmptyState icon={<Check size={22} />} title="当前没有待读积压" description="新上传或未完成的文档会出现在这里。" compact />
           ) : (
             backlogDocuments.map((document) => (
               <button
@@ -3166,11 +3311,7 @@ function StatsView({ payload }: { payload: LibraryPayload }) {
             <span>{recentDocuments.length} 项</span>
           </div>
           {recentDocuments.length === 0 ? (
-            <div className="empty-state compact">
-              <BookOpen size={22} />
-              <strong>还没有阅读记录</strong>
-              <p>从资料库打开一篇文档后，最近阅读会自动更新。</p>
-            </div>
+            <EmptyState icon={<BookOpen size={22} />} title="还没有阅读记录" description="从资料库打开一篇文档后，最近阅读会自动更新。" compact />
           ) : (
             recentDocuments.map((document) => (
               <button
@@ -3233,33 +3374,19 @@ function ChartFallback() {
 }
 
 function DeployCenter({
-  page,
   user,
   aiProfiles,
   aiRequestBreakdown,
   onOpenApiConfig,
-  onOpenDeploy,
 }: {
-  page: 'deploy' | 'api-config'
   user: AppUser
   aiProfiles: AiProfile[]
   aiRequestBreakdown: AiRequestBreakdown
   onOpenApiConfig: () => void
-  onOpenDeploy: () => void
 }) {
   const [result, setResult] = useState<ClientPreflightResult | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
-  const [aiHealth, setAiHealth] = useState<AiHealthResult | null>(null)
-  const [aiHealthLoading, setAiHealthLoading] = useState(false)
-  const [aiHealthError, setAiHealthError] = useState('')
-  const [aiFeatureConfig, setAiFeatureConfig] = useState<AiFeatureConfigPayload | null>(null)
-  const [aiFeatureLoading, setAiFeatureLoading] = useState(false)
-  const [aiFeatureSaving, setAiFeatureSaving] = useState(false)
-  const [aiProviderSaving, setAiProviderSaving] = useState(false)
-  const [aiFeatureError, setAiFeatureError] = useState('')
-  const [aiFeatureNotice, setAiFeatureNotice] = useState('')
-  const [aiFeatureNoticeTone, setAiFeatureNoticeTone] = useState<'success' | 'warning'>('success')
 
   const run = useCallback(async () => {
     setLoading(true)
@@ -3274,127 +3401,8 @@ function DeployCenter({
   }, [user])
 
   useEffect(() => {
-    if (page !== 'deploy') return
     void run()
-  }, [page, run])
-
-  const runAiHealth = useCallback(async (profileId?: string) => {
-    setAiHealthLoading(true)
-    setAiHealthError('')
-    try {
-      const result = await fetchAiHealth(profileId)
-      setAiHealth((current) => mergeAiHealthResults(current, result))
-    } catch (caught) {
-      setAiHealthError(caught instanceof Error ? caught.message : 'AI 健康检查失败。')
-    } finally {
-      setAiHealthLoading(false)
-    }
-  }, [])
-
-  const loadAiFeatureConfig = useCallback(async () => {
-    setAiFeatureLoading(true)
-    setAiFeatureError('')
-    try {
-      setAiFeatureConfig(await fetchAiFeatureConfig())
-    } catch (caught) {
-      setAiFeatureError(caught instanceof Error ? caught.message : 'AI 功能配置加载失败。')
-    } finally {
-      setAiFeatureLoading(false)
-    }
-  }, [])
-
-  useEffect(() => {
-    if (page !== 'api-config') return
-    void loadAiFeatureConfig()
-  }, [loadAiFeatureConfig, page])
-
-  const saveAiBindings = useCallback(async (bindings: AiFeatureBinding[]) => {
-    setAiFeatureSaving(true)
-    setAiFeatureError('')
-    setAiFeatureNotice('')
-    try {
-      const next = await saveAiFeatureBindings(bindings)
-      setAiFeatureConfig(next)
-      setAiFeatureNoticeTone('success')
-      setAiFeatureNotice(`已保存 ${bindings.filter((binding) => binding.profileId).length} 项功能绑定，并完成验证。`)
-    } catch (caught) {
-      setAiFeatureError(caught instanceof Error ? caught.message : 'AI 功能绑定保存失败。')
-    } finally {
-      setAiFeatureSaving(false)
-    }
-  }, [])
-
-  const saveAiProvider = useCallback(async (draft: AiUserProviderDraft) => {
-    setAiProviderSaving(true)
-    setAiFeatureError('')
-    setAiFeatureNotice('')
-    try {
-      const next = await saveAiUserProvider(draft)
-      setAiFeatureConfig(next)
-      const savedProfile = next.profiles.find((profile) => (
-        draft.id ? profile.id === draft.id : profile.source === 'user' && profile.label === draft.label && profile.model === draft.model
-      ))
-      if (savedProfile) {
-        const validation = await fetchAiHealth(savedProfile.id)
-        setAiHealth((current) => mergeAiHealthResults(current, validation))
-        const validatedProfile = validation.profiles.find((profile) => profile.id === savedProfile.id)
-        if (validatedProfile?.status === 'pass') {
-          setAiFeatureNoticeTone('success')
-          setAiFeatureNotice(`已保存 ${savedProfile.label}，并完成验证。`)
-        } else {
-          setAiFeatureNoticeTone('warning')
-          setAiFeatureNotice(`配置已保存，但验证失败。当前不会自动用于 AI 功能，除非你手动绑定。`)
-        }
-      } else {
-        setAiFeatureNoticeTone('success')
-        setAiFeatureNotice(`已保存 ${draft.label}。`)
-      }
-    } catch (caught) {
-      setAiFeatureError(caught instanceof Error ? caught.message : 'AI API 配置保存失败。')
-      throw caught
-    } finally {
-      setAiProviderSaving(false)
-    }
-  }, [])
-
-  const revalidateAiProvider = useCallback(async (profileId: string) => {
-    setAiProviderSaving(true)
-    setAiFeatureError('')
-    setAiFeatureNotice('')
-    try {
-      const result = await fetchAiHealth(profileId)
-      setAiHealth((current) => mergeAiHealthResults(current, result))
-      const profile = result.profiles[0]
-      if (profile?.status === 'pass') {
-        setAiFeatureNoticeTone('success')
-        setAiFeatureNotice(`已重新验证 ${profile.label}，当前接口可用。`)
-      } else {
-        setAiFeatureNoticeTone('warning')
-        setAiFeatureNotice(`已重新验证 ${profile?.label ?? '该平台'}，但当前仍不可用。`)
-      }
-    } catch (caught) {
-      setAiFeatureError(caught instanceof Error ? caught.message : '平台重新验证失败。')
-      throw caught
-    } finally {
-      setAiProviderSaving(false)
-    }
-  }, [])
-
-  const removeAiProvider = useCallback(async (profileId: string) => {
-    setAiProviderSaving(true)
-    setAiFeatureError('')
-    setAiFeatureNotice('')
-    try {
-      setAiFeatureConfig(await deleteAiUserProvider(profileId))
-      setAiFeatureNoticeTone('success')
-      setAiFeatureNotice('已删除该 API 平台配置。')
-    } catch (caught) {
-      setAiFeatureError(caught instanceof Error ? caught.message : 'AI API 配置删除失败。')
-      throw caught
-    } finally {
-      setAiProviderSaving(false)
-    }
-  }, [])
+  }, [run])
 
   const checks = result?.checks ?? []
   const passed = checks.filter((check) => check.status === 'pass').length
@@ -3432,45 +3440,6 @@ function DeployCenter({
       fix: '若异常，请确认 Edge Functions 已部署，并且 AI secrets 已配置。',
     },
   ]
-
-  if (page === 'api-config') {
-    return (
-      <section className="page-stack">
-        <div className="page-header">
-          <div>
-            <p className="eyebrow">API Control Plane</p>
-            <h1>API 配置中心</h1>
-            <p className="generator-summary-copy">日常管理 AI 平台、模型、密钥、功能绑定和调用状态，不再藏在部署中心里。</p>
-          </div>
-          <button className="ghost-button" type="button" onClick={onOpenDeploy}>
-            <Server size={18} />
-            打开部署中心
-          </button>
-        </div>
-
-        <AiConfigCenter
-          profiles={aiProfiles}
-          health={aiHealth}
-          healthLoading={aiHealthLoading}
-          healthError={aiHealthError}
-          featureNotice={aiFeatureNotice}
-          featureNoticeTone={aiFeatureNoticeTone}
-          requestBreakdown={aiRequestBreakdown}
-          featureConfig={aiFeatureConfig}
-          featureLoading={aiFeatureLoading}
-          featureSaving={aiFeatureSaving}
-          providerSaving={aiProviderSaving}
-          featureError={aiFeatureError}
-          onRunHealth={() => void runAiHealth()}
-          onReloadConfig={() => void loadAiFeatureConfig()}
-          onSaveBindings={(bindings) => void saveAiBindings(bindings)}
-          onSaveProvider={saveAiProvider}
-          onRevalidateProvider={revalidateAiProvider}
-          onDeleteProvider={removeAiProvider}
-        />
-      </section>
-    )
-  }
 
   return (
     <section className="page-stack">
@@ -3571,6 +3540,181 @@ function DeployCenter({
           </div>
         </article>
       </section>
+    </section>
+  )
+}
+
+function ApiConfigView({
+  aiProfiles,
+  aiRequestBreakdown,
+  onOpenDeploy,
+}: {
+  aiProfiles: AiProfile[]
+  aiRequestBreakdown: AiRequestBreakdown
+  onOpenDeploy: () => void
+}) {
+  const [aiHealth, setAiHealth] = useState<AiHealthResult | null>(null)
+  const [aiHealthLoading, setAiHealthLoading] = useState(false)
+  const [aiHealthError, setAiHealthError] = useState('')
+  const [aiFeatureConfig, setAiFeatureConfig] = useState<AiFeatureConfigPayload | null>(null)
+  const [aiFeatureLoading, setAiFeatureLoading] = useState(false)
+  const [aiFeatureSaving, setAiFeatureSaving] = useState(false)
+  const [aiProviderSaving, setAiProviderSaving] = useState(false)
+  const [aiFeatureError, setAiFeatureError] = useState('')
+  const [aiFeatureNotice, setAiFeatureNotice] = useState('')
+  const [aiFeatureNoticeTone, setAiFeatureNoticeTone] = useState<'success' | 'warning'>('success')
+
+  const runAiHealth = useCallback(async (profileId?: string) => {
+    setAiHealthLoading(true)
+    setAiHealthError('')
+    try {
+      const result = await fetchAiHealth(profileId)
+      setAiHealth((current) => mergeAiHealthResults(current, result))
+    } catch (caught) {
+      setAiHealthError(caught instanceof Error ? caught.message : 'AI 健康检查失败。')
+    } finally {
+      setAiHealthLoading(false)
+    }
+  }, [])
+
+  const loadAiFeatureConfig = useCallback(async () => {
+    setAiFeatureLoading(true)
+    setAiFeatureError('')
+    try {
+      setAiFeatureConfig(await fetchAiFeatureConfig())
+    } catch (caught) {
+      setAiFeatureError(caught instanceof Error ? caught.message : 'AI 功能配置加载失败。')
+    } finally {
+      setAiFeatureLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    void loadAiFeatureConfig()
+  }, [loadAiFeatureConfig])
+
+  const saveAiBindings = useCallback(async (bindings: AiFeatureBinding[]) => {
+    setAiFeatureSaving(true)
+    setAiFeatureError('')
+    setAiFeatureNotice('')
+    try {
+      const next = await saveAiFeatureBindings(bindings)
+      setAiFeatureConfig(next)
+      setAiFeatureNoticeTone('success')
+      setAiFeatureNotice(`已保存 ${bindings.filter((binding) => binding.profileId).length} 项功能绑定，并完成验证。`)
+    } catch (caught) {
+      setAiFeatureError(caught instanceof Error ? caught.message : 'AI 功能绑定保存失败。')
+    } finally {
+      setAiFeatureSaving(false)
+    }
+  }, [])
+
+  const saveAiProvider = useCallback(async (draft: AiUserProviderDraft) => {
+    setAiProviderSaving(true)
+    setAiFeatureError('')
+    setAiFeatureNotice('')
+    try {
+      const next = await saveAiUserProvider(draft)
+      setAiFeatureConfig(next)
+      const savedProfile = next.profiles.find((profile) => (
+        draft.id ? profile.id === draft.id : profile.source === 'user' && profile.label === draft.label && profile.model === draft.model
+      ))
+      if (savedProfile) {
+        const validation = await fetchAiHealth(savedProfile.id)
+        setAiHealth((current) => mergeAiHealthResults(current, validation))
+        const validatedProfile = validation.profiles.find((profile) => profile.id === savedProfile.id)
+        if (validatedProfile?.status === 'pass') {
+          setAiFeatureNoticeTone('success')
+          setAiFeatureNotice(`已保存 ${savedProfile.label}，并完成验证。`)
+        } else {
+          setAiFeatureNoticeTone('warning')
+          setAiFeatureNotice(`配置已保存，但验证失败。当前不会自动用于 AI 功能，除非你手动绑定。`)
+        }
+      } else {
+        setAiFeatureNoticeTone('success')
+        setAiFeatureNotice(`已保存 ${draft.label}。`)
+      }
+    } catch (caught) {
+      setAiFeatureError(caught instanceof Error ? caught.message : 'AI API 配置保存失败。')
+      throw caught
+    } finally {
+      setAiProviderSaving(false)
+    }
+  }, [])
+
+  const revalidateAiProvider = useCallback(async (profileId: string) => {
+    setAiProviderSaving(true)
+    setAiFeatureError('')
+    setAiFeatureNotice('')
+    try {
+      const result = await fetchAiHealth(profileId)
+      setAiHealth((current) => mergeAiHealthResults(current, result))
+      const profile = result.profiles[0]
+      if (profile?.status === 'pass') {
+        setAiFeatureNoticeTone('success')
+        setAiFeatureNotice(`已重新验证 ${profile.label}，当前接口可用。`)
+      } else {
+        setAiFeatureNoticeTone('warning')
+        setAiFeatureNotice(`已重新验证 ${profile?.label ?? '该平台'}，但当前仍不可用。`)
+      }
+    } catch (caught) {
+      setAiFeatureError(caught instanceof Error ? caught.message : '平台重新验证失败。')
+      throw caught
+    } finally {
+      setAiProviderSaving(false)
+    }
+  }, [])
+
+  const removeAiProvider = useCallback(async (profileId: string) => {
+    setAiProviderSaving(true)
+    setAiFeatureError('')
+    setAiFeatureNotice('')
+    try {
+      setAiFeatureConfig(await deleteAiUserProvider(profileId))
+      setAiFeatureNoticeTone('success')
+      setAiFeatureNotice('已删除该 API 平台配置。')
+    } catch (caught) {
+      setAiFeatureError(caught instanceof Error ? caught.message : 'AI API 配置删除失败。')
+      throw caught
+    } finally {
+      setAiProviderSaving(false)
+    }
+  }, [])
+
+  return (
+    <section className="page-stack">
+      <div className="page-header">
+        <div>
+          <p className="eyebrow">API Control Plane</p>
+          <h1>API 配置中心</h1>
+          <p className="generator-summary-copy">日常管理 AI 平台、模型、密钥、功能绑定和调用状态，不再藏在部署中心里。</p>
+        </div>
+        <button className="ghost-button" type="button" onClick={onOpenDeploy}>
+          <Server size={18} />
+          打开部署中心
+        </button>
+      </div>
+
+      <AiConfigCenter
+        profiles={aiProfiles}
+        health={aiHealth}
+        healthLoading={aiHealthLoading}
+        healthError={aiHealthError}
+        featureNotice={aiFeatureNotice}
+        featureNoticeTone={aiFeatureNoticeTone}
+        requestBreakdown={aiRequestBreakdown}
+        featureConfig={aiFeatureConfig}
+        featureLoading={aiFeatureLoading}
+        featureSaving={aiFeatureSaving}
+        providerSaving={aiProviderSaving}
+        featureError={aiFeatureError}
+        onRunHealth={() => void runAiHealth()}
+        onReloadConfig={() => void loadAiFeatureConfig()}
+        onSaveBindings={(bindings) => void saveAiBindings(bindings)}
+        onSaveProvider={saveAiProvider}
+        onRevalidateProvider={revalidateAiProvider}
+        onDeleteProvider={removeAiProvider}
+      />
     </section>
   )
 }
@@ -4015,11 +4159,12 @@ function AiConfigCenter({
         </div>
 
         {!featureConfig ? (
-          <div className="empty-state compact">
-            <Settings2 size={22} />
-            <strong>{featureLoading ? '正在读取功能配置' : '还没有功能配置数据'}</strong>
-            <p>{featureLoading ? '正在连接 ai-feature-config。' : '请确认 ai-feature-config 已部署。'}</p>
-          </div>
+          <EmptyState
+            icon={<Settings2 size={22} />}
+            title={featureLoading ? '正在读取功能配置' : '还没有功能配置数据'}
+            description={featureLoading ? '正在连接 ai-feature-config。' : '请确认 ai-feature-config 已部署。'}
+            compact
+          />
         ) : (
           <div className="ai-feature-grid">
             <section className="ai-feature-card available" key="health-check">
@@ -4122,11 +4267,7 @@ function AiConfigCenter({
         </div>
         <div className="ai-profile-grid">
           {userProfiles.length === 0 ? (
-            <div className="empty-state compact">
-              <Sparkles size={22} />
-              <strong>还没有保存任何 API 平台</strong>
-              <p>先从上面的平台模板开始，保存后这里会展示状态卡片。</p>
-            </div>
+            <EmptyState icon={<Sparkles size={22} />} title="还没有保存任何 API 平台" description="先从上面的平台模板开始，保存后这里会展示状态卡片。" compact />
           ) : (
             userProfiles.map((profile) => {
               const healthProfile = healthById.get(profile.id)
@@ -4188,11 +4329,7 @@ function AiConfigCenter({
         </div>
         <div className="ai-profile-grid">
           {systemProfiles.length === 0 ? (
-            <div className="empty-state compact">
-              <Sparkles size={22} />
-              <strong>没有读取到系统预设模型</strong>
-              <p>请部署 ai-profiles 并在 Supabase Edge Function Secrets 中配置模型。</p>
-            </div>
+            <EmptyState icon={<Sparkles size={22} />} title="没有读取到系统预设模型" description="请部署 ai-profiles 并在 Supabase Edge Function Secrets 中配置模型。" compact />
           ) : (
             systemProfiles.map((profile) => {
               const healthProfile = healthById.get(profile.id)
@@ -4289,11 +4426,7 @@ function AiConfigCenter({
           </div>
           <div className="ai-diagnostic-list">
             {recentFailures.length === 0 ? (
-              <div className="empty-state compact">
-                <Check size={22} />
-                <strong>最近没有失败记录</strong>
-                <p>如果之后出现异常，这里会列出最近失败的功能、模型和修复建议。</p>
-              </div>
+              <EmptyState icon={<Check size={22} />} title="最近没有失败记录" description="如果之后出现异常，这里会列出最近失败的功能、模型和修复建议。" compact />
             ) : (
               recentFailures.map((failure, index) => (
                 <section className="ai-diagnostic-card" key={`${failure.requestType}-${failure.createdAt}-${index}`}>
@@ -4627,11 +4760,7 @@ function PersonasView({
 
         <div className="persona-list">
           {personas.length === 0 ? (
-            <div className="empty-state">
-              <BrainCircuit size={22} />
-              <strong>还没有虚拟人物</strong>
-              <p>创建后，阅读页会用它的提示词、语气和默认模型。</p>
-            </div>
+            <EmptyState icon={<BrainCircuit size={22} />} title="还没有虚拟人物" description="创建后，阅读页会用它的提示词、语气和默认模型。" />
           ) : (
             personas.map((persona) => (
               <article className="persona-card companion-persona-card" key={persona.id}>
@@ -5819,7 +5948,7 @@ function ActionDock({
                         <time>{formatDateTime(highlight.created_at)}</time>
                         <div className="highlight-style-preview" aria-label="笔记样式">
                           <span className={highlight.color ? undefined : 'empty'} style={{ backgroundColor: highlight.color ?? 'transparent' }} />
-                          <span style={{ color: highlight.text_color ?? '#334155' }}>A</span>
+                          <span style={{ color: highlight.text_color ?? 'var(--text)' }}>A</span>
                         </div>
                       </div>
                       <span>{highlight.selected_text}</span>
@@ -6101,19 +6230,15 @@ function NotesView({
       </div>
 
       {loading ? (
-        <LoadingScreen compact />
+        <SkeletonList count={5} compact lines={2} />
       ) : filteredNotes.length === 0 ? (
-        <div className="empty-state">
-          <NotebookPen size={22} />
-          <strong>暂无笔记</strong>
-          <p>在阅读页选中文字并添加笔记后，会在这里统一管理。</p>
-        </div>
+        <EmptyState icon={<NotebookPen size={22} />} title="暂无笔记" description="在阅读页选中文字并添加笔记后，会在这里统一管理。" />
       ) : (
         <motion.div className="notes-grid" layout variants={staggerContainer} initial="hidden" animate="show">
           {filteredNotes.map((note) => (
             <motion.article className="note-card" key={note.id} layout variants={cardMotion} whileHover={liftHover}>
               <div className="note-card-topline">
-                <span className="category-dot" style={{ backgroundColor: note.document?.category?.color ?? '#64748B' }} />
+                <span className="category-dot" style={{ backgroundColor: note.document?.category?.color ?? 'var(--muted)' }} />
                 <span>{note.document?.category?.name ?? '未分类'}</span>
                 <time>{formatDateTime(note.created_at)}</time>
               </div>

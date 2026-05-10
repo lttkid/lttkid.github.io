@@ -1182,6 +1182,8 @@ function inferClientAiErrorCode(message: string, fallbackCode: string) {
   if (lower.includes('failed to send a request')) return fallbackCode
   if (lower.includes('timeout') || lower.includes('abort')) return 'MODEL_TIMEOUT'
   if (lower.includes('401') || lower.includes('403') || lower.includes('unauthorized')) return 'PROVIDER_AUTH_FAILED'
+  if (lower.includes('empty answer')) return 'MODEL_OUTPUT_INVALID'
+  if (lower.includes('no ai profile') || lower.includes('not configured')) return 'MODEL_NOT_CONFIGURED'
   if (lower.includes('markdown fences') || lower.includes('<!doctype html>') || lower.includes('output')) return 'MODEL_OUTPUT_INVALID'
   return fallbackCode
 }
@@ -1191,7 +1193,8 @@ function aiClientSuggestion(code: string) {
     FUNCTION_NOT_DEPLOYED: '请确认 Supabase Edge Function 已部署，尤其是 ai-feature-config 和 ai-generate-html。',
     MODEL_TIMEOUT: '模型响应超时。可以换更快模型、缩短需求，或稍后重试。',
     PROVIDER_AUTH_FAILED: 'API Key 验证失败。请检查当前平台是否正确、API Key 是否来自该平台、Base URL 是否匹配、Key 是否过期，或该平台是否不支持兼容的 /models 接口。',
-    MODEL_OUTPUT_INVALID: '模型输出不是合规单文件 HTML。建议换更强的 HTML 模型或简化生成需求。',
+    MODEL_OUTPUT_INVALID: '模型返回空内容或不合规的 HTML。可能原因：模型不支持长输出、API 余额不足、内容被安全过滤。建议检查 API 余额，换更强模型，或简化需求后重试。',
+    MODEL_NOT_CONFIGURED: '没有可用的 AI 配置。请到 API 配置中心添加并绑定一个 AI 服务。',
     MODEL_DISCOVERY_FAILED: '无法自动拉取模型列表，可先使用模板推荐模型或手动填写。',
     AI_BINDING_SAVE_FAILED: '功能绑定没有保存成功，请刷新配置中心后重试。',
     AI_PROVIDER_SAVE_FAILED: 'API 平台没有保存成功，请检查 Base URL、模型名和 Key。',

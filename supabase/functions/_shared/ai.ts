@@ -576,6 +576,7 @@ export function classifyAiError(error: unknown): AiErrorCode {
   }
   if (message.includes('no ai profile') || message.includes('model') && message.includes('required')) return 'MODEL_NOT_CONFIGURED'
   if (message.includes('provider error 429') || message.includes('provider error 5')) return 'PROVIDER_UNAVAILABLE'
+  if (message.includes('empty answer')) return 'MODEL_OUTPUT_INVALID'
   return 'UNKNOWN'
 }
 
@@ -593,7 +594,7 @@ export function errorSuggestion(code: AiErrorCode) {
   const suggestions: Record<AiErrorCode, string> = {
     PROVIDER_AUTH_FAILED: 'API Key 认证失败。请检查当前平台是否正确、Key 是否来自该平台、Base URL 是否匹配、Key 是否过期，以及该平台是否支持兼容的 /models 接口。',
     MODEL_TIMEOUT: '模型响应超时。可以换更快的模型、缩短需求，或稍后重试。',
-    MODEL_OUTPUT_INVALID: '模型输出不是合规的单文件 HTML。系统已尝试修复；建议换更强的 HTML 生成模型或简化需求。',
+    MODEL_OUTPUT_INVALID: '模型返回空内容或不合规的 HTML。可能原因：模型不支持长输出、API 余额不足、内容被安全过滤。建议：1) 检查 API 余额；2) 换更强的模型；3) 简化需求后重试。',
     PROVIDER_UNAVAILABLE: '模型服务暂时不可用或被限流。请稍后重试，或切换到其他 Provider。',
     MODEL_NOT_CONFIGURED: '没有可用模型配置。请到部署中心绑定一个已验证的模型。',
     FUNCTION_NOT_DEPLOYED: '请确认对应 Supabase Edge Function 已部署，且前端 Supabase URL 与 anon key 正确。',
@@ -697,53 +698,80 @@ export async function chatCompletionWithMeta({
     throw new AiFunctionError('PROVIDER_AUTH_FAILED', `Missing API key secret: ${apiKeyEnv}`, 400)
   }
 
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), timeoutMs)
-  let response: Response
-  try {
-    response = await fetch(`${baseUrl}/chat/completions`, {
-      method: 'POST',
-      signal: controller.signal,
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: profile.model,
-        messages,
-        temperature,
-        ...(typeof maxTokens === 'number' ? { max_tokens: maxTokens } : {}),
-      }),
-    })
-  } catch (error) {
-    if (error instanceof DOMException && error.name === 'AbortError') {
-      throw new AiFunctionError('MODEL_TIMEOUT', 'The AI provider request timed out.', 504)
+  const RETRYABLE_CODES: Set<AiErrorCode> = new Set(['MODEL_OUTPUT_INVALID', 'PROVIDER_UNAVAILABLE'])
+  const MAX_ATTEMPTS = 2
+
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), timeoutMs)
+    let response: Response
+    try {
+      response = await fetch(`${baseUrl}/chat/completions`, {
+        method: 'POST',
+        signal: controller.signal,
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: profile.model,
+          messages,
+          temperature,
+          ...(typeof maxTokens === 'number' ? { max_tokens: maxTokens } : {}),
+        }),
+      })
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        throw new AiFunctionError('MODEL_TIMEOUT', 'The AI provider request timed out.', 504)
+      }
+      throw error
+    } finally {
+      clearTimeout(timeout)
     }
-    throw error
-  } finally {
-    clearTimeout(timeout)
+
+    if (!response.ok) {
+      const text = sanitizeAiError(await response.text())
+      const code = response.status === 401 || response.status === 403
+        ? 'PROVIDER_AUTH_FAILED'
+        : response.status === 429 || response.status >= 500
+          ? 'PROVIDER_UNAVAILABLE'
+          : 'UNKNOWN'
+      const err = new AiFunctionError(code, `AI provider error ${response.status}: ${text}`, response.status)
+      if (attempt < MAX_ATTEMPTS && RETRYABLE_CODES.has(code)) {
+        console.warn(`[AI] Retryable error (attempt ${attempt}): ${code} — retrying in 1s`)
+        await new Promise((r) => setTimeout(r, 1000))
+        continue
+      }
+      throw err
+    }
+
+    const data = await response.json()
+    const answer = data.choices?.[0]?.message?.content
+    if (!answer) {
+      const snippet = JSON.stringify(data).slice(0, 300)
+      console.error(`[AI] Empty answer from ${profile.provider}/${profile.model}. Response: ${snippet}`)
+      const err = new AiFunctionError(
+        'MODEL_OUTPUT_INVALID',
+        `AI provider returned an empty answer. Response: ${JSON.stringify(data).slice(0, 200)}`,
+      )
+      if (attempt < MAX_ATTEMPTS) {
+        console.warn(`[AI] Empty answer (attempt ${attempt}) — retrying in 1s`)
+        await new Promise((r) => setTimeout(r, 1000))
+        continue
+      }
+      throw err
+    }
+
+    return {
+      answer: String(answer),
+      usedModel: String(data.model ?? profile.model),
+      provider: profile.provider,
+      profileId: profile.id,
+      source: profile.source ?? 'server',
+    }
   }
 
-  if (!response.ok) {
-    const text = sanitizeAiError(await response.text())
-    const code = response.status === 401 || response.status === 403
-      ? 'PROVIDER_AUTH_FAILED'
-      : response.status === 429 || response.status >= 500
-        ? 'PROVIDER_UNAVAILABLE'
-        : 'UNKNOWN'
-    throw new AiFunctionError(code, `AI provider error ${response.status}: ${text}`, response.status)
-  }
-
-  const data = await response.json()
-  const answer = data.choices?.[0]?.message?.content
-  if (!answer) throw new Error('AI provider returned an empty answer.')
-  return {
-    answer: String(answer),
-    usedModel: String(data.model ?? profile.model),
-    provider: profile.provider,
-    profileId: profile.id,
-    source: profile.source ?? 'server',
-  }
+  throw new AiFunctionError('MODEL_OUTPUT_INVALID', 'AI provider failed after retries.', 502)
 }
 
 export function stripHtml(html: string) {
