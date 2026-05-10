@@ -13,10 +13,36 @@ export type AiProfile = {
   userProviderId?: string
   apiKeyCiphertext?: string
   apiKeyIv?: string
+  apiKeyOverride?: string
   apiKeyHint?: string | null
   ownerId?: string
   supportsVision?: boolean
   supportsHtmlGeneration?: boolean
+}
+
+export type AiModelCapability = 'text' | 'vision' | 'long_context' | 'html'
+
+export type AiModelOption = {
+  id: string
+  label: string
+  ownedBy?: string | null
+  capabilities: AiModelCapability[]
+  source: 'provider' | 'preset' | 'manual'
+  contextWindow?: number | null
+  htmlRecommended?: boolean
+}
+
+export type AiProviderTemplate = {
+  id: string
+  label: string
+  provider: string
+  baseUrl: string
+  apiType: 'openai-compatible'
+  defaultModel: string
+  docsUrl?: string
+  keyHint: string
+  notes: string
+  models: AiModelOption[]
 }
 
 export type PublicAiProfile = {
@@ -26,6 +52,7 @@ export type PublicAiProfile = {
   model: string
   enabled: boolean
   configured: boolean
+  baseUrl?: string
   baseUrlHost: string
   source: 'server' | 'user'
   userProviderId?: string
@@ -43,6 +70,164 @@ type RuntimeProfile = {
   baseUrl: string
   baseUrlHost: string
   configured: boolean
+}
+
+export const providerTemplates: AiProviderTemplate[] = [
+  {
+    id: 'siliconflow',
+    label: 'SiliconFlow',
+    provider: 'siliconflow',
+    baseUrl: 'https://api.siliconflow.cn/v1',
+    apiType: 'openai-compatible',
+    defaultModel: 'Qwen/Qwen2.5-7B-Instruct',
+    docsUrl: 'https://docs.siliconflow.cn/',
+    keyHint: '通常以 sk- 开头',
+    notes: '适合接入 Qwen、DeepSeek、视觉模型等 OpenAI-compatible 模型。',
+    models: [
+      modelOption('Qwen/Qwen2.5-7B-Instruct', ['text', 'html']),
+      modelOption('Qwen/Qwen2.5-14B-Instruct', ['text', 'html']),
+      modelOption('deepseek-ai/DeepSeek-V3', ['text', 'long_context', 'html']),
+      modelOption('Qwen/Qwen2-VL-72B-Instruct', ['text', 'vision', 'html']),
+    ],
+  },
+  {
+    id: 'deepseek',
+    label: 'DeepSeek',
+    provider: 'deepseek',
+    baseUrl: 'https://api.deepseek.com',
+    apiType: 'openai-compatible',
+    defaultModel: 'deepseek-chat',
+    docsUrl: 'https://api-docs.deepseek.com/',
+    keyHint: 'DeepSeek API Key',
+    notes: '适合文本解释、摘要、长文推理；视觉输入请绑定其他 vision 模型。',
+    models: [
+      modelOption('deepseek-chat', ['text', 'long_context', 'html']),
+      modelOption('deepseek-reasoner', ['text', 'long_context']),
+    ],
+  },
+  {
+    id: 'dashscope',
+    label: '通义千问 / DashScope',
+    provider: 'dashscope',
+    baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    apiType: 'openai-compatible',
+    defaultModel: 'qwen-plus',
+    docsUrl: 'https://help.aliyun.com/zh/model-studio/',
+    keyHint: 'DashScope API Key',
+    notes: '兼容 OpenAI SDK，适合摘要、解释、HTML 生成；视觉任务选择 qwen-vl 系列。',
+    models: [
+      modelOption('qwen-plus', ['text', 'long_context', 'html']),
+      modelOption('qwen-turbo', ['text', 'html']),
+      modelOption('qwen-max', ['text', 'long_context', 'html']),
+      modelOption('qwen-vl-plus', ['text', 'vision', 'html']),
+    ],
+  },
+  {
+    id: 'mimo',
+    label: '小米 MiMo',
+    provider: 'mimo',
+    baseUrl: '',
+    apiType: 'openai-compatible',
+    defaultModel: 'MiMo-7B-RL',
+    docsUrl: 'https://github.com/XiaomiMiMo/MiMo',
+    keyHint: '请以服务商控制台为准',
+    notes: 'MiMo 生态接口仍需按你实际服务商控制台填写 Base URL；这里先提供模型能力占位。',
+    models: [
+      modelOption('MiMo-7B-RL', ['text']),
+    ],
+  },
+  {
+    id: 'openrouter',
+    label: 'OpenRouter',
+    provider: 'openrouter',
+    baseUrl: 'https://openrouter.ai/api/v1',
+    apiType: 'openai-compatible',
+    defaultModel: 'openai/gpt-4o-mini',
+    docsUrl: 'https://openrouter.ai/docs',
+    keyHint: 'OpenRouter API Key',
+    notes: '聚合多家模型，模型名称通常带 provider 前缀。',
+    models: [
+      modelOption('openai/gpt-4o-mini', ['text', 'vision', 'html']),
+      modelOption('anthropic/claude-3.5-sonnet', ['text', 'vision', 'long_context', 'html']),
+      modelOption('google/gemini-flash-1.5', ['text', 'vision', 'long_context', 'html']),
+    ],
+  },
+  {
+    id: 'zhipu',
+    label: '智谱 GLM',
+    provider: 'zhipu',
+    baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+    apiType: 'openai-compatible',
+    defaultModel: 'glm-4-flash',
+    docsUrl: 'https://docs.bigmodel.cn/',
+    keyHint: '智谱 API Key',
+    notes: '适合文本和多模态任务；视觉能力请确认所选 GLM 模型支持图片输入。',
+    models: [
+      modelOption('glm-4-flash', ['text', 'html']),
+      modelOption('glm-4-plus', ['text', 'long_context', 'html']),
+      modelOption('glm-4v', ['text', 'vision', 'html']),
+    ],
+  },
+  {
+    id: 'volcengine',
+    label: '火山方舟',
+    provider: 'volcengine',
+    baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
+    apiType: 'openai-compatible',
+    defaultModel: '',
+    docsUrl: 'https://www.volcengine.com/docs/82379',
+    keyHint: '火山方舟 API Key',
+    notes: '模型 ID 通常来自方舟控制台 Endpoint，请优先从 /models 拉取或手动粘贴。',
+    models: [
+      modelOption('请从控制台选择 endpoint/model', ['text']),
+    ],
+  },
+  {
+    id: 'moonshot',
+    label: '月之暗面 Kimi',
+    provider: 'moonshot',
+    baseUrl: 'https://api.moonshot.cn/v1',
+    apiType: 'openai-compatible',
+    defaultModel: 'moonshot-v1-8k',
+    docsUrl: 'https://platform.moonshot.cn/docs',
+    keyHint: 'Moonshot API Key',
+    notes: '适合文本阅读、摘要和长上下文；视觉输入请绑定其他模型。',
+    models: [
+      modelOption('moonshot-v1-8k', ['text', 'html']),
+      modelOption('moonshot-v1-32k', ['text', 'long_context', 'html']),
+      modelOption('moonshot-v1-128k', ['text', 'long_context', 'html']),
+    ],
+  },
+  {
+    id: 'custom-openai',
+    label: 'OpenAI-compatible 自定义',
+    provider: 'openai-compatible',
+    baseUrl: 'https://api.openai.com/v1',
+    apiType: 'openai-compatible',
+    defaultModel: 'gpt-4o-mini',
+    docsUrl: 'https://platform.openai.com/docs',
+    keyHint: '服务商 API Key',
+    notes: '适合任何兼容 /chat/completions 和 /models 的服务。',
+    models: [
+      modelOption('gpt-4o-mini', ['text', 'vision', 'html']),
+      modelOption('gpt-4.1-mini', ['text', 'vision', 'long_context', 'html']),
+    ],
+  },
+]
+
+function modelOption(
+  id: string,
+  capabilities: AiModelCapability[],
+  options: Partial<AiModelOption> = {},
+): AiModelOption {
+  return {
+    id,
+    label: id,
+    source: 'preset',
+    capabilities,
+    htmlRecommended: capabilities.includes('html'),
+    ...options,
+  }
 }
 
 export function getSupabaseForRequest(req: Request) {
@@ -111,6 +296,8 @@ function normalizeProfile(profile: Partial<AiProfile>, index: number): AiProfile
     baseUrl: profile.baseUrl,
     apiKeyEnv: profile.apiKeyEnv,
     baseUrlEnv: profile.baseUrlEnv,
+    supportsVision: Boolean(profile.supportsVision),
+    supportsHtmlGeneration: profile.supportsHtmlGeneration !== false,
   }
 }
 
@@ -169,7 +356,8 @@ export async function resolveProfileForFeature(
     .eq('feature_id', featureId)
     .maybeSingle()
 
-  return resolveProfile(String(data?.profile_id ?? ''), supabase, userId)
+  if (data?.profile_id) return resolveProfile(String(data.profile_id), supabase, userId)
+  return (await getAvailableProfiles(supabase, userId))[0] ?? null
 }
 
 async function importEncryptionKey(secret: string) {
@@ -226,7 +414,9 @@ export async function resolveRuntimeProfile(profile: AiProfile): Promise<Runtime
     Deno.env.get(profile.baseUrlEnv ?? 'AI_BASE_URL') ??
     'https://api.openai.com/v1'
   ).replace(/\/$/, '')
-  const apiKey = profile.source === 'user'
+  const apiKey = profile.apiKeyOverride
+    ? profile.apiKeyOverride
+    : profile.source === 'user'
     ? await decryptUserApiKey(String(profile.apiKeyCiphertext ?? ''), String(profile.apiKeyIv ?? ''))
     : Deno.env.get(apiKeyEnv) ?? null
   let baseUrlHost = 'invalid-url'
@@ -256,6 +446,7 @@ export async function toPublicProfile(profile: AiProfile): Promise<PublicAiProfi
     model: profile.model,
     enabled: profile.enabled,
     configured: runtime.configured,
+    baseUrl: runtime.baseUrl,
     baseUrlHost: runtime.baseUrlHost,
     source: profile.source ?? 'server',
     userProviderId: profile.userProviderId,
@@ -274,6 +465,138 @@ export function sanitizeAiError(error: unknown) {
     .slice(0, 700)
 }
 
+export type AiErrorCode =
+  | 'PROVIDER_AUTH_FAILED'
+  | 'MODEL_TIMEOUT'
+  | 'MODEL_OUTPUT_INVALID'
+  | 'PROVIDER_UNAVAILABLE'
+  | 'MODEL_NOT_CONFIGURED'
+  | 'FUNCTION_NOT_DEPLOYED'
+  | 'REQUEST_INVALID'
+  | 'UNKNOWN'
+
+export class AiFunctionError extends Error {
+  code: AiErrorCode
+  status: number
+  details?: Record<string, unknown>
+
+  constructor(code: AiErrorCode, message: string, status = 500, details?: Record<string, unknown>) {
+    super(message)
+    this.name = 'AiFunctionError'
+    this.code = code
+    this.status = status
+    this.details = details
+  }
+}
+
+export function classifyAiError(error: unknown): AiErrorCode {
+  if (error instanceof AiFunctionError) return error.code
+  const message = sanitizeAiError(error).toLowerCase()
+  if (message.includes('missing api key') || message.includes('401') || message.includes('403') || message.includes('unauthorized')) {
+    return 'PROVIDER_AUTH_FAILED'
+  }
+  if (message.includes('abort') || message.includes('timeout') || message.includes('timed out')) return 'MODEL_TIMEOUT'
+  if (
+    message.includes('markdown fences') ||
+    message.includes('must start with <!doctype html>') ||
+    message.includes('must include') ||
+    message.includes('not allowed') ||
+    message.includes('empty html')
+  ) {
+    return 'MODEL_OUTPUT_INVALID'
+  }
+  if (message.includes('no ai profile') || message.includes('model') && message.includes('required')) return 'MODEL_NOT_CONFIGURED'
+  if (message.includes('provider error 429') || message.includes('provider error 5')) return 'PROVIDER_UNAVAILABLE'
+  return 'UNKNOWN'
+}
+
+export function errorPayload(error: unknown, fallbackStatus = 500) {
+  const code = classifyAiError(error)
+  const status = error instanceof AiFunctionError ? error.status : fallbackStatus
+  return {
+    error: sanitizeAiError(error),
+    code,
+    suggestion: errorSuggestion(code),
+  }
+}
+
+export function errorSuggestion(code: AiErrorCode) {
+  const suggestions: Record<AiErrorCode, string> = {
+    PROVIDER_AUTH_FAILED: '请检查 API Key 是否正确、额度是否可用，或重新保存该 Provider。',
+    MODEL_TIMEOUT: '模型响应超时。可以换更快的模型、缩短需求，或稍后重试。',
+    MODEL_OUTPUT_INVALID: '模型输出不是合规的单文件 HTML。系统已尝试修复；建议换更强的 HTML 生成模型或简化需求。',
+    PROVIDER_UNAVAILABLE: '模型服务暂时不可用或被限流。请稍后重试，或切换到其他 Provider。',
+    MODEL_NOT_CONFIGURED: '没有可用模型配置。请到部署中心绑定一个已验证的模型。',
+    FUNCTION_NOT_DEPLOYED: '请确认对应 Supabase Edge Function 已部署，且前端 Supabase URL 与 anon key 正确。',
+    REQUEST_INVALID: '请求内容不完整或格式不支持，请检查输入后重试。',
+    UNKNOWN: '请查看部署中心的 AI 健康检查和 ai_requests 日志定位原因。',
+  }
+  return suggestions[code]
+}
+
+export function inferModelCapabilities(modelId: string): AiModelCapability[] {
+  const lower = modelId.toLowerCase()
+  const capabilities = new Set<AiModelCapability>(['text'])
+  if (/(vision|vl|gpt-4o|omni|gemini|claude-3|qwen.*vl|glm-4v|image)/i.test(lower)) capabilities.add('vision')
+  if (/(128k|32k|long|1m|200k|context|deepseek|qwen-plus|qwen-max|moonshot-v1-128k|moonshot-v1-32k)/i.test(lower)) capabilities.add('long_context')
+  if (/(html|instruct|chat|gpt|qwen|deepseek|glm|claude|gemini|moonshot|mimo)/i.test(lower)) capabilities.add('html')
+  return Array.from(capabilities)
+}
+
+export async function listOpenAiCompatibleModels(profile: AiProfile, timeoutMs = 15000): Promise<AiModelOption[]> {
+  const { apiKey, apiKeyEnv, baseUrl } = await resolveRuntimeProfile(profile)
+  if (!apiKey) throw new AiFunctionError('PROVIDER_AUTH_FAILED', `Missing API key secret: ${apiKeyEnv}`, 400)
+
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), timeoutMs)
+  let response: Response
+  try {
+    response = await fetch(`${baseUrl}/models`, {
+      method: 'GET',
+      signal: controller.signal,
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+    })
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new AiFunctionError('MODEL_TIMEOUT', 'Timed out while fetching model list.', 504)
+    }
+    throw error
+  } finally {
+    clearTimeout(timeout)
+  }
+
+  if (!response.ok) {
+    const text = sanitizeAiError(await response.text())
+    const code = response.status === 401 || response.status === 403 ? 'PROVIDER_AUTH_FAILED' : 'PROVIDER_UNAVAILABLE'
+    throw new AiFunctionError(code, `AI provider models error ${response.status}: ${text}`, response.status)
+  }
+
+  const payload = await response.json()
+  const rawModels = Array.isArray(payload?.data) ? payload.data : Array.isArray(payload?.models) ? payload.models : []
+  return rawModels
+    .map((model: Record<string, unknown>) => normalizeModelOption(model))
+    .filter((model: AiModelOption | null): model is AiModelOption => Boolean(model))
+    .slice(0, 200)
+}
+
+function normalizeModelOption(model: Record<string, unknown>): AiModelOption | null {
+  const id = String(model.id ?? model.name ?? '').trim()
+  if (!id) return null
+  const capabilities = inferModelCapabilities(id)
+  return {
+    id,
+    label: String(model.display_name ?? model.name ?? id),
+    ownedBy: typeof model.owned_by === 'string' ? model.owned_by : null,
+    source: 'provider',
+    capabilities,
+    htmlRecommended: capabilities.includes('html'),
+    contextWindow: typeof model.context_window === 'number' ? model.context_window : null,
+  }
+}
+
 export type ChatMessageContent =
   | string
   | Array<
@@ -281,22 +604,28 @@ export type ChatMessageContent =
       | { type: 'image_url'; image_url: { url: string } }
     >
 
-export async function chatCompletion({
-  profile,
-  messages,
-  temperature = 0.3,
-  maxTokens,
-  timeoutMs = 45000,
-}: {
+type ChatCompletionArgs = {
   profile: AiProfile
   messages: Array<{ role: 'system' | 'user' | 'assistant'; content: ChatMessageContent }>
   temperature?: number
   maxTokens?: number
   timeoutMs?: number
-}) {
+}
+
+export async function chatCompletion(args: ChatCompletionArgs) {
+  return (await chatCompletionWithMeta(args)).answer
+}
+
+export async function chatCompletionWithMeta({
+  profile,
+  messages,
+  temperature = 0.3,
+  maxTokens,
+  timeoutMs = 45000,
+}: ChatCompletionArgs) {
   const { apiKey, apiKeyEnv, baseUrl } = await resolveRuntimeProfile(profile)
   if (!apiKey) {
-    throw new Error(`Missing API key secret: ${apiKeyEnv}`)
+    throw new AiFunctionError('PROVIDER_AUTH_FAILED', `Missing API key secret: ${apiKeyEnv}`, 400)
   }
 
   const controller = new AbortController()
@@ -317,18 +646,35 @@ export async function chatCompletion({
         ...(typeof maxTokens === 'number' ? { max_tokens: maxTokens } : {}),
       }),
     })
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new AiFunctionError('MODEL_TIMEOUT', 'The AI provider request timed out.', 504)
+    }
+    throw error
   } finally {
     clearTimeout(timeout)
   }
 
   if (!response.ok) {
-    throw new Error(`AI provider error ${response.status}: ${sanitizeAiError(await response.text())}`)
+    const text = sanitizeAiError(await response.text())
+    const code = response.status === 401 || response.status === 403
+      ? 'PROVIDER_AUTH_FAILED'
+      : response.status === 429 || response.status >= 500
+        ? 'PROVIDER_UNAVAILABLE'
+        : 'UNKNOWN'
+    throw new AiFunctionError(code, `AI provider error ${response.status}: ${text}`, response.status)
   }
 
   const data = await response.json()
   const answer = data.choices?.[0]?.message?.content
   if (!answer) throw new Error('AI provider returned an empty answer.')
-  return String(answer)
+  return {
+    answer: String(answer),
+    usedModel: String(data.model ?? profile.model),
+    provider: profile.provider,
+    profileId: profile.id,
+    source: profile.source ?? 'server',
+  }
 }
 
 export function stripHtml(html: string) {

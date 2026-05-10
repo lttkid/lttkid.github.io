@@ -5,7 +5,7 @@
 1. Create a Supabase project.
 2. In Authentication settings, disable public sign-ups. In Supabase, open **Authentication > Providers > Email**, turn off public signups, and keep manual user creation enabled.
 3. Create your own user manually in Supabase Auth.
-4. Run `supabase/migrations/001_initial_schema.sql` in SQL Editor.
+4. Run `supabase/migrations/001_initial_schema.sql` in SQL Editor. This migration includes `documents.sort_order`, which is required before the live app can load the manually sorted library.
 5. Copy your Auth user UUID. Use it as `SUPABASE_OWNER_USER_ID` for HTML sync.
 6. Deploy functions:
 
@@ -69,10 +69,10 @@ In the deployed app, open **系统体检** after logging in. It should show four
 - `ai-profiles` returns at least one model profile.
 - `ai-generate-html` can generate a strict self-contained HTML page through the generator, including optional image-based question understanding when the selected model supports vision input.
 - The AI configuration center shows profiles without exposing API keys.
-- The AI configuration center can load `ai-feature-config`, save per-feature profile bindings, and show not-deployed hints for unavailable backends.
+- The AI configuration center can load `ai-feature-config`, apply provider templates, fetch/cache model lists through `/models`, save per-feature profile bindings, immediately validate them, and show not-deployed hints for unavailable backends.
 - Clicking **测试 AI 连接** runs `ai-health` and records `health_check` rows in `ai_requests`.
 
-The API configuration center supports server-managed profiles and per-user OpenAI-compatible providers. User-entered API keys are submitted once to `ai-feature-config`, encrypted with `AI_USER_KEY_ENCRYPTION_SECRET`, and never returned to the frontend. The UI only shows a masked key hint.
+The API configuration center supports server-managed profiles and per-user OpenAI-compatible providers. User-entered API keys are submitted once to `ai-feature-config`, encrypted with `AI_USER_KEY_ENCRYPTION_SECRET`, and never returned to the frontend. The UI only shows a masked key hint. AI calls and binding validation write `feature_id`, `profile_id`, `profile_source`, `used_model`, `error_code`, and latency metadata into `ai_requests` so the operator can prove which model was actually used.
 
 Before release, run the frontend smoke and live tests with a real Auth user that has at least one synced or uploaded document:
 
@@ -138,6 +138,8 @@ The sync summary reports:
 The real Action writes the same summary to the GitHub Actions job summary.
 
 Each synced document stores a private text index in `documents.content_text`, plus `word_count` and `indexed_at`. The index is truncated to 200,000 characters by default and remains protected by the same RLS rules as the document row. You can override the limit with `HTML_SYNC_MAX_INDEX_CHARS`.
+
+Manual library order is stored in `documents.sort_order`. New sync rows receive an initial order, while updates preserve the existing order so a content sync does not reset a user's personal shelf.
 
 ## Verification
 

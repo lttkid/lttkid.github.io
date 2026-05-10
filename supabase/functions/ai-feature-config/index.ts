@@ -1,12 +1,20 @@
 import { corsHeaders, jsonResponse } from '../_shared/cors.ts'
 import {
+  AiFunctionError,
+  chatCompletionWithMeta,
+  errorPayload,
   encryptUserApiKey,
   getAvailableProfiles,
+  inferModelCapabilities,
+  listOpenAiCompatibleModels,
   maskApiKey,
+  providerTemplates,
   requireUser,
   sanitizeAiError,
   toPublicProfile,
+  type AiModelOption,
   type AiFeatureId,
+  type AiProfile,
 } from '../_shared/ai.ts'
 
 type FeatureDefinition = {
@@ -23,6 +31,10 @@ type BindingRow = {
   feature_id: AiFeatureId
   profile_id: string
   updated_at: string
+  validation_status?: 'pass' | 'fail' | 'unknown' | null
+  validated_at?: string | null
+  validated_model?: string | null
+  validation_error?: string | null
 }
 
 const features: FeatureDefinition[] = [
@@ -86,8 +98,13 @@ Deno.serve(async (req) => {
         await upsertUserProvider(supabase, user.id, body.provider)
       } else if (body.action === 'delete_provider') {
         await deleteUserProvider(supabase, user.id, body.providerId)
+      } else if (body.action === 'list_models') {
+        return jsonResponse(await listModelsForRequest(supabase, user.id, body))
+      } else if (body.action === 'validate_bindings') {
+        return jsonResponse(await buildPayload(supabase, user.id, await validateBindings(supabase, user.id, body.bindings ?? [])))
       } else if (Object.hasOwn(body, 'bindings')) {
-        await saveBindings(supabase, user.id, body.bindings ?? [])
+        const savedRows = await saveBindings(supabase, user.id, body.bindings ?? [])
+        return jsonResponse(await buildPayload(supabase, user.id, await validateBindings(supabase, user.id, savedRows)))
       }
     }
 
@@ -103,6 +120,9 @@ type ConfigBody = {
         bindings?: Array<{ featureId?: string; profileId?: string }>
         provider?: UserProviderInput
         providerId?: string
+        profileId?: string
+        providerDraft?: UserProviderInput
+        force?: boolean
 }
 
 async function readConfigBody(req: Request): Promise<ConfigBody> {
@@ -152,6 +172,7 @@ async function saveBindings(
     onConflict: 'owner_id,feature_id',
   })
   if (error) throw error
+  return rows.map((row) => ({ featureId: row.feature_id, profileId: row.profile_id }))
 }
 
 async function upsertUserProvider(
@@ -159,8 +180,8 @@ async function upsertUserProvider(
   userId: string,
   input: UserProviderInput | undefined,
 ) {
-  const normalized = normalizeProviderInput(input)
   const existingId = input?.id ? String(input.id).replace(/^user:/, '') : ''
+  const normalized = normalizeProviderInput(input, { allowMissingKey: Boolean(existingId) })
   let encrypted: { ciphertext: string; iv: string } | null = null
   let keyHint = ''
 
@@ -209,7 +230,7 @@ async function deleteUserProvider(
   if (error) throw error
 }
 
-function normalizeProviderInput(input: UserProviderInput | undefined) {
+function normalizeProviderInput(input: UserProviderInput | undefined, options: { allowMissingModel?: boolean; allowMissingKey?: boolean } = {}) {
   const label = String(input?.label ?? '').trim().slice(0, 80)
   const provider = String(input?.provider ?? 'openai-compatible').trim().slice(0, 80) || 'openai-compatible'
   const model = String(input?.model ?? '').trim().slice(0, 160)
@@ -217,7 +238,8 @@ function normalizeProviderInput(input: UserProviderInput | undefined) {
   const apiKey = String(input?.apiKey ?? '').trim()
 
   if (!label) throw new Error('Provider label is required.')
-  if (!model) throw new Error('Model name is required.')
+  if (!model && !options.allowMissingModel) throw new Error('Model name is required.')
+  if (!apiKey && !options.allowMissingKey) throw new Error('API key is required.')
   let baseUrl: URL
   try {
     baseUrl = new URL(rawBaseUrl)
@@ -243,11 +265,11 @@ async function buildPayload(supabase: Awaited<ReturnType<typeof requireUser>>['s
   const [{ data: bindings }, { data: requestRows }] = await Promise.all([
     supabase
       .from('ai_feature_bindings')
-      .select('feature_id,profile_id,updated_at')
+      .select('feature_id,profile_id,updated_at,validation_status,validated_at,validated_model,validation_error')
       .eq('owner_id', userId),
     supabase
       .from('ai_requests')
-      .select('request_type,provider,model,status,created_at')
+      .select('request_type,feature_id,provider,model,used_model,profile_id,profile_source,status,error_code,created_at')
       .eq('owner_id', userId)
       .order('created_at', { ascending: false })
       .limit(800),
@@ -256,6 +278,7 @@ async function buildPayload(supabase: Awaited<ReturnType<typeof requireUser>>['s
   return {
     generatedAt: new Date().toISOString(),
     profiles,
+    providerTemplates,
     features,
     bindings: normalizeBindings(bindings as BindingRow[] | null, profiles.map((profile) => profile.id)),
     stats: buildStats(requestRows ?? []),
@@ -271,7 +294,7 @@ function normalizeBindings(rows: BindingRow[] | null, profileIds: string[]) {
   const profileIdSet = new Set(profileIds)
   const defaults = new Map<AiFeatureId, string | null>()
   for (const feature of features) {
-    defaults.set(feature.id, profileIds[0] ?? null)
+    defaults.set(feature.id, null)
   }
 
   for (const row of rows ?? []) {
@@ -284,6 +307,10 @@ function normalizeBindings(rows: BindingRow[] | null, profileIds: string[]) {
       featureId: feature.id,
       profileId: defaults.get(feature.id),
       updatedAt: row?.updated_at ?? null,
+      validationStatus: row?.validation_status ?? 'unknown',
+      validatedAt: row?.validated_at ?? null,
+      validatedModel: row?.validated_model ?? null,
+      validationError: row?.validation_error ?? null,
     }
   })
 }
@@ -294,8 +321,8 @@ function buildStats(rows: Array<Record<string, unknown>>) {
   const byStatus = new Map<string, number>()
 
   for (const row of rows) {
-    const requestType = String(row.request_type ?? 'unknown')
-    const model = String(row.model ?? 'unknown')
+    const requestType = String(row.feature_id ?? row.request_type ?? 'unknown')
+    const model = String(row.used_model ?? row.model ?? 'unknown')
     const status = String(row.status ?? 'unknown')
     const createdAt = String(row.created_at ?? '')
 
@@ -309,6 +336,252 @@ function buildStats(rows: Array<Record<string, unknown>>) {
     byFeature: Array.from(byFeature, ([featureId, bucket]) => ({ featureId, ...bucket })),
     byModel: Array.from(byModel, ([model, bucket]) => ({ model, ...bucket })),
     byStatus: Array.from(byStatus, ([status, count]) => ({ status, count })),
+  }
+}
+
+async function listModelsForRequest(
+  supabase: Awaited<ReturnType<typeof requireUser>>['supabase'],
+  userId: string,
+  body: ConfigBody,
+) {
+  const generatedAt = new Date().toISOString()
+  const profile = await resolveModelDiscoveryProfile(supabase, userId, body)
+  const runtimeHost = safeHost(profile.baseUrl ?? '')
+  const cacheKey = modelCacheKey(profile.provider, profile.baseUrl ?? '', profile.id)
+
+  if (!body.force) {
+    const { data } = await supabase
+      .from('ai_model_cache')
+      .select('models,error_message,fetched_at,expires_at')
+      .eq('owner_id', userId)
+      .eq('cache_key', cacheKey)
+      .maybeSingle()
+    if (data?.models && String(data.expires_at ?? '') > generatedAt) {
+      const cachedModels = Array.isArray(data.models) ? data.models : JSON.parse(String(data.models ?? '[]'))
+      return {
+        generatedAt,
+        profileId: profile.id.startsWith('draft:') ? null : profile.id,
+        provider: profile.provider,
+        baseUrlHost: runtimeHost,
+        models: cachedModels as AiModelOption[],
+        cached: true,
+        error: data.error_message ?? null,
+      }
+    }
+  }
+
+  try {
+    const models = await listOpenAiCompatibleModels(profile)
+    await upsertModelCache(supabase, userId, cacheKey, profile.provider, runtimeHost, models, null)
+    return {
+      generatedAt,
+      profileId: profile.id.startsWith('draft:') ? null : profile.id,
+      provider: profile.provider,
+      baseUrlHost: runtimeHost,
+      models,
+      cached: false,
+      error: null,
+    }
+  } catch (error) {
+    const sanitized = sanitizeAiError(error)
+    const fallbackModels = fallbackModelsForProvider(profile.provider)
+    await upsertModelCache(supabase, userId, cacheKey, profile.provider, runtimeHost, fallbackModels, sanitized)
+    return {
+      generatedAt,
+      profileId: profile.id.startsWith('draft:') ? null : profile.id,
+      provider: profile.provider,
+      baseUrlHost: runtimeHost,
+      models: fallbackModels,
+      cached: false,
+      error: sanitized,
+    }
+  }
+}
+
+async function resolveModelDiscoveryProfile(
+  supabase: Awaited<ReturnType<typeof requireUser>>['supabase'],
+  userId: string,
+  body: ConfigBody,
+): Promise<AiProfile> {
+  if (body.profileId) {
+    const profiles = await getAvailableProfiles(supabase, userId)
+    const profile = profiles.find((item) => item.id === body.profileId)
+    if (profile) return profile
+  }
+
+  const normalized = normalizeProviderInput(body.providerDraft, {
+    allowMissingModel: true,
+    allowMissingKey: false,
+  })
+  return {
+    id: `draft:${normalized.provider}:${normalized.baseUrl}:${normalized.model}`,
+    label: normalized.label,
+    provider: normalized.provider,
+    model: normalized.model || fallbackModelsForProvider(normalized.provider)[0]?.id || 'model',
+    enabled: true,
+    source: 'user',
+    baseUrl: normalized.baseUrl,
+    apiKeyCiphertext: '',
+    apiKeyIv: '',
+    apiKeyHint: normalized.apiKey ? maskApiKey(normalized.apiKey) : null,
+    supportsVision: normalized.supportsVision,
+    supportsHtmlGeneration: normalized.supportsHtmlGeneration,
+    apiKeyOverride: normalized.apiKey,
+  } as AiProfile
+}
+
+function modelCacheKey(provider: string, baseUrl: string, profileId: string) {
+  return `${profileId}|${provider}|${safeHost(baseUrl)}`
+}
+
+async function upsertModelCache(
+  supabase: Awaited<ReturnType<typeof requireUser>>['supabase'],
+  userId: string,
+  cacheKey: string,
+  provider: string,
+  baseUrlHost: string,
+  models: AiModelOption[],
+  errorMessage: string | null,
+) {
+  await supabase.from('ai_model_cache').upsert({
+    owner_id: userId,
+    cache_key: cacheKey,
+      provider,
+      base_url_host: baseUrlHost,
+      models: JSON.stringify(models),
+      error_message: errorMessage,
+    fetched_at: new Date().toISOString(),
+    expires_at: new Date(Date.now() + 12 * 60 * 60 * 1000).toISOString(),
+  }, { onConflict: 'owner_id,cache_key' })
+}
+
+function fallbackModelsForProvider(provider: string): AiModelOption[] {
+  const normalized = provider.toLowerCase()
+  const template = providerTemplates.find((item) => item.provider.toLowerCase() === normalized || item.id === normalized)
+  return template?.models ?? [{
+    id: '',
+    label: '手动输入模型',
+    source: 'manual',
+    capabilities: ['text'],
+    htmlRecommended: false,
+  }]
+}
+
+async function validateBindings(
+  supabase: Awaited<ReturnType<typeof requireUser>>['supabase'],
+  userId: string,
+  bindings: Array<{ featureId?: string; profileId?: string }>,
+) {
+  const now = new Date().toISOString()
+  const profiles = await getAvailableProfiles(supabase, userId)
+  const results = []
+
+  for (const binding of bindings) {
+    const featureId = String(binding.featureId ?? '').trim() as AiFeatureId
+    const profileId = String(binding.profileId ?? '').trim()
+    const feature = features.find((item) => item.id === featureId)
+    const profile = profiles.find((item) => item.id === profileId)
+    if (!feature || !profile) continue
+
+    const started = Date.now()
+    let status: 'pass' | 'fail' = 'pass'
+    let error: string | null = null
+    let usedModel: string | null = profile.model
+    let latencyMs: number | null = null
+
+    try {
+      assertProfileCapability(feature, profile)
+      const meta = await chatCompletionWithMeta({
+        profile,
+        temperature: 0,
+        maxTokens: 16,
+        timeoutMs: 20000,
+        messages: [
+          { role: 'system', content: 'Return only OK.' },
+          { role: 'user', content: `Validate feature binding: ${feature.label}.` },
+        ],
+      })
+      usedModel = meta.usedModel
+      latencyMs = Date.now() - started
+      await supabase.from('ai_requests').insert({
+        owner_id: userId,
+        request_type: 'binding_validation',
+        feature_id: feature.id,
+        provider: profile.provider,
+        model: profile.model,
+        used_model: usedModel,
+        profile_id: profile.id,
+        provider_id: profile.userProviderId ?? profile.id,
+        profile_source: profile.source ?? 'server',
+        status: 'ok',
+        latency_ms: latencyMs,
+        created_at: now,
+      })
+    } catch (caught) {
+      const payload = errorPayload(caught)
+      status = 'fail'
+      error = payload.error
+      latencyMs = Date.now() - started
+      await supabase.from('ai_requests').insert({
+        owner_id: userId,
+        request_type: 'binding_validation',
+        feature_id: feature.id,
+        provider: profile.provider,
+        model: profile.model,
+        used_model: usedModel,
+        profile_id: profile.id,
+        provider_id: profile.userProviderId ?? profile.id,
+        profile_source: profile.source ?? 'server',
+        status: 'error',
+        error_code: payload.code,
+        error_message: payload.error,
+        latency_ms: latencyMs,
+        created_at: now,
+      })
+    }
+
+    await supabase
+      .from('ai_feature_bindings')
+      .update({
+        validation_status: status,
+        validated_at: now,
+        validated_model: usedModel,
+        validation_error: error,
+      })
+      .eq('owner_id', userId)
+      .eq('feature_id', feature.id)
+
+    results.push({
+      featureId: feature.id,
+      profileId: profile.id,
+      status,
+      checkedAt: now,
+      usedModel,
+      latencyMs,
+      error,
+    })
+  }
+
+  return results
+}
+
+function assertProfileCapability(feature: FeatureDefinition, profile: AiProfile) {
+  if (feature.status !== 'available') {
+    throw new AiFunctionError('FUNCTION_NOT_DEPLOYED', `${feature.label} 后端尚未部署，不能验证绑定。`, 404)
+  }
+  if (feature.requiredCapability === 'vision' && !profile.supportsVision && !inferModelCapabilities(profile.model).includes('vision')) {
+    throw new AiFunctionError('MODEL_NOT_CONFIGURED', '当前模型未标记为支持视觉输入，图片识题不能绑定它。', 400)
+  }
+  if (feature.requiredCapability === 'html' && profile.supportsHtmlGeneration === false) {
+    throw new AiFunctionError('MODEL_NOT_CONFIGURED', '当前模型被标记为不用于 HTML 生成。', 400)
+  }
+}
+
+function safeHost(baseUrl: string) {
+  try {
+    return new URL(baseUrl).host
+  } catch {
+    return 'invalid-url'
   }
 }
 

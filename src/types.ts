@@ -1,4 +1,4 @@
-export type SortKey = 'imported_at' | 'source_modified_at'
+export type SortKey = 'manual' | 'imported_at' | 'source_modified_at'
 export type AppView = 'library' | 'generator' | 'reader' | 'notes' | 'stats' | 'personas' | 'deploy'
 
 export interface AppUser {
@@ -50,6 +50,7 @@ export interface DocumentRecord {
   source_modified_at: string | null
   imported_at: string
   updated_at: string
+  sort_order: number
   archived: boolean
   favorite: boolean
   summary: string | null
@@ -154,12 +155,38 @@ export interface AiProfile {
   model: string
   enabled: boolean
   configured?: boolean
+  baseUrl?: string
   baseUrlHost?: string
   source?: 'server' | 'user'
   userProviderId?: string
   keyHint?: string | null
   supportsVision?: boolean
   supportsHtmlGeneration?: boolean
+}
+
+export type AiModelCapability = 'text' | 'vision' | 'long_context' | 'html'
+
+export interface AiModelOption {
+  id: string
+  label: string
+  ownedBy?: string | null
+  capabilities: AiModelCapability[]
+  source: 'provider' | 'preset' | 'manual'
+  contextWindow?: number | null
+  htmlRecommended?: boolean
+}
+
+export interface AiProviderTemplate {
+  id: string
+  label: string
+  provider: string
+  baseUrl: string
+  apiType: 'openai-compatible'
+  defaultModel: string
+  docsUrl?: string
+  keyHint: string
+  notes: string
+  models: AiModelOption[]
 }
 
 export interface AiHealthProfile extends AiProfile {
@@ -194,6 +221,10 @@ export interface AiFeatureBinding {
   featureId: AiFeatureId
   profileId: string | null
   updatedAt: string | null
+  validationStatus?: 'pass' | 'fail' | 'unknown'
+  validatedAt?: string | null
+  validatedModel?: string | null
+  validationError?: string | null
 }
 
 export interface AiStatBucket {
@@ -203,11 +234,23 @@ export interface AiStatBucket {
   lastCalledAt: string | null
 }
 
+export interface AiBindingValidation {
+  featureId: AiFeatureId
+  profileId: string | null
+  status: 'pass' | 'fail' | 'skipped'
+  checkedAt: string
+  usedModel: string | null
+  latencyMs: number | null
+  error: string | null
+}
+
 export interface AiFeatureConfigPayload {
   generatedAt: string
   profiles: AiProfile[]
+  providerTemplates: AiProviderTemplate[]
   features: AiFeatureDefinition[]
   bindings: AiFeatureBinding[]
+  bindingValidation?: AiBindingValidation[]
   stats: {
     total: number
     byFeature: Array<AiStatBucket & { featureId: string }>
@@ -231,6 +274,16 @@ export interface AiUserProviderDraft {
   supportsVision: boolean
   supportsHtmlGeneration: boolean
   enabled: boolean
+}
+
+export interface AiModelDiscoveryResult {
+  generatedAt: string
+  profileId: string | null
+  provider: string
+  baseUrlHost: string
+  models: AiModelOption[]
+  cached: boolean
+  error: string | null
 }
 
 export interface AiRequestBreakdown {
@@ -339,6 +392,9 @@ export interface HtmlGenerationResponse {
   summary: string
   type: HtmlGenerationType
   model: string
+  profileId?: string
+  provider?: string
+  source?: 'server' | 'user'
   promptVersion: string
 }
 

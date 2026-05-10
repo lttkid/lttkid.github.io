@@ -5,7 +5,8 @@
 ## 功能
 
 - Supabase Auth 邮箱密码登录，无注册入口
-- 私密 HTML 文件库、分类、搜索、收藏、按导入/修改时间排序
+- 私密 HTML 文件库、分类、搜索、收藏、按导入/修改时间排序和自定义书架顺序
+- 自定义资料顺序：桌面拖放排序，移动端上移/下移，刷新后保持顺序
 - 前端直接上传 `.html` / `.htm`，自动计算 hash、提取标题、写入正文索引并上传到当前用户私密路径
 - 同步时提取私密全文索引，资料库可搜索 HTML 正文并只显示命中片段
 - 沙盒 iframe 阅读 HTML，默认阅读模式移除原始脚本；可信文档可手动切换交互模式运行文档内部点击逻辑
@@ -69,7 +70,9 @@ supabase secrets set AI_USER_KEY_ENCRYPTION_SECRET="long-random-secret-for-user-
 
 推荐手动把 AI key 配置为 Supabase Edge Function Secrets，不要写进前端环境变量或数据库。部署后可以在“部署中心”的 AI 配置中心点击“测试 AI 连接”，它会通过 `ai-health` 对每个启用模型发起一次极短真实调用，并把成功或失败写入 `ai_requests`。
 
-AI 配置中心还支持用户添加自己的 OpenAI-compatible API 平台、Base URL、模型和 API Key，并把不同功能绑定到不同 Profile，例如阅读摘要、划词解释、AI HTML 生成、图片识题和虚拟人物对话。用户自己的 API Key 只在提交时发给 `ai-feature-config`，由 Edge Function 使用 `AI_USER_KEY_ENCRYPTION_SECRET` 加密后写入 `ai_user_providers`；之后前端只看到脱敏 `keyHint`，不会回显密钥。若某个后端函数尚未部署，例如后续的虚拟人物对话接口，配置中心会显示为“未部署”。
+AI 配置中心还支持用户添加自己的 OpenAI-compatible API 平台、Base URL、模型和 API Key，并把不同功能绑定到不同 Profile，例如阅读摘要、划词解释、AI HTML 生成、图片识题和虚拟人物对话。配置页内置 SiliconFlow、DeepSeek、通义千问 / DashScope、小米 MiMo、OpenRouter、智谱、火山方舟、月之暗面和自定义兼容接口模板；选择模板后会自动带出 Base URL、默认模型和能力说明，并可通过后端代理调用 `/models` 拉取模型列表，失败时回落到模板模型或手动输入。
+
+用户自己的 API Key 只在提交时发给 `ai-feature-config`，由 Edge Function 使用 `AI_USER_KEY_ENCRYPTION_SECRET` 加密后写入 `ai_user_providers`；之后前端只看到脱敏 `keyHint`，不会回显密钥。保存功能绑定后会立即做一次轻量验证，并把 `feature_id`、`profile_id`、`profile_source`、`used_model`、`error_code` 和延迟写入 `ai_requests`。若某个后端函数尚未部署，例如后续的虚拟人物对话接口，配置中心会显示为“未部署”。
 
 也可以在公开前端仓库中配置后端部署 workflow 所需的 GitHub Secrets：
 
@@ -77,7 +80,7 @@ AI 配置中心还支持用户添加自己的 OpenAI-compatible API 平台、Bas
 - `SUPABASE_PROJECT_REF`
 - `SUPABASE_DB_PASSWORD`（仅在 workflow 中勾选 apply migrations 时使用）
 
-然后手动运行 `.github/workflows/deploy-supabase.yml`，选择是否执行 migration 和 Edge Functions 部署。API 配置中心需要部署 `ai-feature-config` 并应用 `007_ai_feature_bindings.sql`、`008_ai_user_providers.sql` migrations。
+然后手动运行 `.github/workflows/deploy-supabase.yml`，选择是否执行 migration 和 Edge Functions 部署。API 配置中心需要部署 `ai-feature-config` 并应用 `007_ai_feature_bindings.sql`、`008_ai_user_providers.sql`、`009_ai_observability_and_model_cache.sql` migrations。
 
 ## GitHub Pages 部署
 
@@ -118,6 +121,8 @@ npm run prepare:content-repo -- ../html-vault-content
 - 在 GitHub Actions 中写入同步摘要：scanned、indexed、uploaded、unchanged、archived、failed
 
 全文索引会写入 `documents.content_text`，默认最多保留每个 HTML 的前 200,000 字符，并记录 `word_count` 与 `indexed_at`。这些字段受 Supabase RLS 保护，只对登录用户可见；前端搜索结果只展示短命中片段，不展示整篇正文。
+
+资料库自定义排序会写入 `documents.sort_order`。默认“自定义顺序”视图支持桌面拖放；移动端会显示上移/下移按钮。搜索、收藏筛选和归档视图属于临时视图，不允许改动排序。分类筛选内调整顺序时，会同步反映到全局书架顺序。
 
 当前仓库的 `.gitignore` 会忽略 `html/**/*.html`，避免把私人 HTML 意外推到公开 Pages 仓库。
 

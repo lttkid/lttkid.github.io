@@ -1,10 +1,10 @@
 import { corsHeaders, jsonResponse } from '../_shared/cors.ts'
 import {
   chatCompletion,
+  errorPayload,
   getAvailableProfiles,
   requireUser,
   resolveRuntimeProfile,
-  sanitizeAiError,
   toPublicProfile,
 } from '../_shared/ai.ts'
 
@@ -43,9 +43,15 @@ Deno.serve(async (req) => {
           await supabase.from('ai_requests').insert({
             owner_id: user.id,
             request_type: 'health_check',
+            feature_id: 'health_check',
             provider: profile.provider,
             model: profile.model,
+            used_model: profile.model,
+            profile_id: profile.id,
+            provider_id: profile.userProviderId ?? profile.id,
+            profile_source: profile.source ?? 'server',
             status: 'error',
+            error_code: runtime.baseUrlHost === 'invalid-url' ? 'REQUEST_INVALID' : 'PROVIDER_AUTH_FAILED',
             error_message: error,
             created_at: generatedAt,
           })
@@ -81,9 +87,15 @@ Deno.serve(async (req) => {
           await supabase.from('ai_requests').insert({
             owner_id: user.id,
             request_type: 'health_check',
+            feature_id: 'health_check',
             provider: profile.provider,
             model: profile.model,
+            used_model: profile.model,
+            profile_id: profile.id,
+            provider_id: profile.userProviderId ?? profile.id,
+            profile_source: profile.source ?? 'server',
             status: 'ok',
+            latency_ms: latencyMs,
             created_at: generatedAt,
           })
 
@@ -95,14 +107,22 @@ Deno.serve(async (req) => {
             error: null,
           }
         } catch (error) {
-          const sanitized = sanitizeAiError(error)
+          const payload = errorPayload(error)
+          const sanitized = payload.error
           await supabase.from('ai_requests').insert({
             owner_id: user.id,
             request_type: 'health_check',
+            feature_id: 'health_check',
             provider: profile.provider,
             model: profile.model,
+            used_model: profile.model,
+            profile_id: profile.id,
+            provider_id: profile.userProviderId ?? profile.id,
+            profile_source: profile.source ?? 'server',
             status: 'error',
+            error_code: payload.code,
             error_message: sanitized,
+            latency_ms: Date.now() - started,
             created_at: generatedAt,
           })
 
@@ -120,6 +140,6 @@ Deno.serve(async (req) => {
     return jsonResponse({ generatedAt, profiles: results })
   } catch (error) {
     if (error instanceof Response) return error
-    return jsonResponse({ error: sanitizeAiError(error) }, 500)
+    return jsonResponse(errorPayload(error), 500)
   }
 })

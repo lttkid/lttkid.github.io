@@ -1,6 +1,8 @@
 import { AnimatePresence, motion, type Variants } from 'framer-motion'
 import {
   Archive,
+  ArrowDown,
+  ArrowUp,
   BarChart3,
   BookOpen,
   BrainCircuit,
@@ -10,6 +12,7 @@ import {
   Clock3,
   FileText,
   Folder,
+  GripVertical,
   Heart,
   Highlighter,
   ImagePlus,
@@ -61,6 +64,7 @@ import {
   createPersona,
   deleteAiUserProvider,
   fetchAiFeatureConfig,
+  fetchAiModelOptions,
   deleteHighlight,
   fetchAiHealth,
   fetchDocumentHtml,
@@ -86,6 +90,7 @@ import {
   updateHighlightNote,
   updateReadingSession,
   updateDocumentManagement,
+  updateDocumentSortOrder,
   updatePersona,
   uploadHtmlFiles,
   type HtmlUploadResult,
@@ -98,6 +103,8 @@ import type {
   AiFeatureBinding,
   AiFeatureConfigPayload,
   AiFeatureId,
+  AiModelDiscoveryResult,
+  AiModelOption,
   AiProfile,
   AiRequestBreakdown,
   AiUserProviderDraft,
@@ -772,6 +779,49 @@ export default function App() {
     }
   }
 
+  const handleReorderDocuments = async (orderedDocuments: DocumentRecord[]) => {
+    const currentDocuments = [...(payload?.documents ?? [])].sort(
+      (a, b) =>
+        (a.sort_order ?? 2147000000) - (b.sort_order ?? 2147000000) ||
+        Date.parse(b.imported_at ?? '') - Date.parse(a.imported_at ?? ''),
+    )
+    const orderedIds = new Set(orderedDocuments.map((document) => document.id))
+    const orderedQueue = [...orderedDocuments]
+    const mergedDocuments =
+      orderedDocuments.length === currentDocuments.length
+        ? orderedDocuments
+        : currentDocuments.map((document) => (orderedIds.has(document.id) ? orderedQueue.shift() ?? document : document))
+    const updates = mergedDocuments.map((document, index) => ({
+      id: document.id,
+      sort_order: (index + 1) * 1000,
+    }))
+    const updateById = new Map(updates.map((item) => [item.id, item.sort_order]))
+
+    setPayload((current) =>
+      current
+        ? {
+            ...current,
+            documents: current.documents.map((document) =>
+              updateById.has(document.id)
+                ? {
+                    ...document,
+                    sort_order: updateById.get(document.id)!,
+                    updated_at: new Date().toISOString(),
+                  }
+                : document,
+            ),
+          }
+        : current,
+    )
+
+    try {
+      await updateDocumentSortOrder(updates)
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : '排序保存失败。')
+      void refresh()
+    }
+  }
+
   const handleLoadArchived = async () => {
     if (isDemoMode && archivedDocuments.length > 0) return
     setArchiveLoading(true)
@@ -923,6 +973,7 @@ export default function App() {
           onUpload={handleUploadDocuments}
           onOpenGenerator={() => navigate('generator')}
           onUpdateDocument={handleUpdateDocument}
+          onReorderDocuments={handleReorderDocuments}
           onLoadArchived={handleLoadArchived}
           onRestoreDocument={handleRestoreDocument}
         />
@@ -1811,7 +1862,7 @@ function GeneratorView({
       })
       setResult(response)
       setSaveTitle(response.title)
-      setStatus(isDemoMode ? 'Demo 生成已完成，可以预览、修改或保存。' : '生成已完成，可以预览、修改或保存。')
+      setStatus(isDemoMode ? 'Demo 生成已完成，可以预览、修改或保存。' : `生成已完成，实际使用模型：${response.model}。`)
       dispatchCompanionStatus({ state: 'success', message: '生成好了，可以预览或继续修改。' })
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'AI HTML 生成失败。')
@@ -1845,7 +1896,7 @@ function GeneratorView({
       setResult(response)
       setSaveTitle(response.title)
       setRevisionInstruction('')
-      setStatus('修改已应用，请检查预览。')
+      setStatus(isDemoMode ? '修改已应用，请检查预览。' : `修改已应用，实际使用模型：${response.model}。`)
       dispatchCompanionStatus({ state: 'success', message: '修改已应用，预览已更新。' })
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'AI HTML 修改失败。')
@@ -2134,6 +2185,7 @@ function LibraryView({
   onUpload,
   onOpenGenerator,
   onUpdateDocument,
+  onReorderDocuments,
   onLoadArchived,
   onRestoreDocument,
 }: {
@@ -2146,12 +2198,13 @@ function LibraryView({
   onUpload: (files: File[], categoryId: string | null) => Promise<HtmlUploadResult[]>
   onOpenGenerator: () => void
   onUpdateDocument: (document: DocumentRecord, draft: DocumentUpdateDraft) => Promise<void>
+  onReorderDocuments: (documents: DocumentRecord[]) => Promise<void>
   onLoadArchived: () => Promise<void>
   onRestoreDocument: (document: DocumentRecord) => Promise<void>
 }) {
   const [search, setSearch] = useState('')
   const [categoryId, setCategoryId] = useState('all')
-  const [sortKey, setSortKey] = useState<SortKey>('imported_at')
+  const [sortKey, setSortKey] = useState<SortKey>('manual')
   const [favoritesOnly, setFavoritesOnly] = useState(false)
   const [archiveMode, setArchiveMode] = useState(false)
   const [managedDocument, setManagedDocument] = useState<DocumentRecord | null>(null)
@@ -2160,6 +2213,9 @@ function LibraryView({
   const [uploadOpen, setUploadOpen] = useState(false)
   const [uploadCategoryId, setUploadCategoryId] = useState('')
   const [uploadItems, setUploadItems] = useState<UploadQueueItem[]>([])
+  const [draggingDocumentId, setDraggingDocumentId] = useState<string | null>(null)
+  const [sortSaving, setSortSaving] = useState(false)
+  const [sortMessage, setSortMessage] = useState('')
 
   const handleUploadFileSelection = (files: File[]) => {
     setUploadItems(files.map((file) => createUploadQueueItem(file)))
@@ -2222,12 +2278,55 @@ function LibraryView({
         if (!query) return true
         return Boolean(item.snippet)
       })
-      .sort((a, b) => Date.parse(b.document[sortKey] ?? '') - Date.parse(a.document[sortKey] ?? ''))
+      .sort((a, b) => {
+        if (sortKey === 'manual') {
+          return (
+            (a.document.sort_order ?? 2147000000) - (b.document.sort_order ?? 2147000000) ||
+            Date.parse(b.document.imported_at ?? '') - Date.parse(a.document.imported_at ?? '')
+          )
+        }
+        return Date.parse(b.document[sortKey] ?? '') - Date.parse(a.document[sortKey] ?? '')
+      })
   }, [categoryId, favoritesOnly, search, sortKey, sourceDocuments])
 
   const filteredDocuments = useMemo(() => {
     return searchResults.map((item) => item.document)
   }, [searchResults])
+  const canReorder =
+    !archiveMode &&
+    sortKey === 'manual' &&
+    !favoritesOnly &&
+    !search.trim() &&
+    filteredDocuments.length > 1
+  const reorderScopeLabel = categoryId === 'all' ? '全局书架顺序' : '当前分类内顺序'
+
+  const persistReorder = async (documents: DocumentRecord[], reason: 'drag' | 'button') => {
+    if (!canReorder || sortSaving) return
+    setSortSaving(true)
+    setSortMessage('')
+    try {
+      await onReorderDocuments(documents)
+      setSortMessage(reason === 'drag' ? '拖放排序已保存。' : '移动排序已保存。')
+    } finally {
+      setSortSaving(false)
+    }
+  }
+
+  const moveDocumentTo = (sourceId: string, targetId: string) => {
+    if (sourceId === targetId) return
+    const nextDocuments = moveDocumentBefore(filteredDocuments, sourceId, targetId)
+    void persistReorder(nextDocuments, 'drag')
+  }
+
+  const moveDocumentByStep = (documentId: string, direction: -1 | 1) => {
+    const currentIndex = filteredDocuments.findIndex((document) => document.id === documentId)
+    const nextIndex = currentIndex + direction
+    if (currentIndex < 0 || nextIndex < 0 || nextIndex >= filteredDocuments.length) return
+    const nextDocuments = [...filteredDocuments]
+    const [document] = nextDocuments.splice(currentIndex, 1)
+    nextDocuments.splice(nextIndex, 0, document)
+    void persistReorder(nextDocuments, 'button')
+  }
 
   useEffect(() => {
     const openUpload = () => {
@@ -2281,6 +2380,7 @@ function LibraryView({
         <label className="select-box">
           <SlidersHorizontal size={18} />
           <select value={sortKey} onChange={(event) => setSortKey(event.target.value as SortKey)}>
+            <option value="manual">自定义顺序</option>
             <option value="imported_at">按导入时间</option>
             <option value="source_modified_at">按修改时间</option>
           </select>
@@ -2347,12 +2447,51 @@ function LibraryView({
         <Metric label="收藏" value={payload.stats.favoriteCount.toString()} icon={Heart} />
       </div>
 
+      <div className={canReorder ? 'sort-guidance active' : 'sort-guidance'}>
+        <GripVertical size={18} />
+        <div>
+          <strong>{canReorder ? `正在调整${reorderScopeLabel}` : '排序规则'}</strong>
+          <p>
+            {canReorder
+              ? '桌面端可拖放卡片；移动端使用卡片底部的上移/下移按钮。保存后刷新仍保持当前顺序。'
+              : sortKey !== 'manual'
+                ? '切换到“自定义顺序”后可以手动调整书架。'
+                : archiveMode
+                  ? '归档视图不允许调整排序。'
+                  : search.trim() || favoritesOnly
+                    ? '搜索或收藏筛选是临时视图，为避免误改书架顺序，暂不允许拖拽。'
+                    : '至少需要两份文档才能调整顺序。'}
+          </p>
+        </div>
+        {sortSaving ? (
+          <span className="sort-saving">
+            <Loader2 className="spin" size={16} />
+            保存中
+          </span>
+        ) : sortMessage ? (
+          <span className="sort-saved">{sortMessage}</span>
+        ) : null}
+      </div>
+
       <motion.div className="document-grid" layout variants={staggerContainer} initial="hidden" animate="show">
-        {searchResults.map(({ document, snippet }) => (
+        {searchResults.map(({ document, snippet }, index) => (
           <DocumentCard
             key={document.id}
             document={document}
             searchSnippet={snippet}
+            reorderMode={canReorder}
+            isDragging={draggingDocumentId === document.id}
+            isFirst={index === 0}
+            isLast={index === searchResults.length - 1}
+            sortSaving={sortSaving}
+            onDragStart={(documentId) => setDraggingDocumentId(documentId)}
+            onDragEnd={() => setDraggingDocumentId(null)}
+            onDropOnDocument={(targetId) => {
+              if (draggingDocumentId) moveDocumentTo(draggingDocumentId, targetId)
+              setDraggingDocumentId(null)
+            }}
+            onMoveUp={(documentId) => moveDocumentByStep(documentId, -1)}
+            onMoveDown={(documentId) => moveDocumentByStep(documentId, 1)}
             onOpen={archiveMode ? undefined : onOpen}
             onFavorite={onFavorite}
             onManage={archiveMode ? undefined : setManagedDocument}
@@ -2548,6 +2687,16 @@ function HtmlUploadPanel({
 function DocumentCard({
   document,
   searchSnippet,
+  reorderMode = false,
+  isDragging = false,
+  isFirst = false,
+  isLast = false,
+  sortSaving = false,
+  onDragStart,
+  onDragEnd,
+  onDropOnDocument,
+  onMoveUp,
+  onMoveDown,
   onOpen,
   onFavorite,
   onManage,
@@ -2555,6 +2704,16 @@ function DocumentCard({
 }: {
   document: DocumentRecord
   searchSnippet?: string
+  reorderMode?: boolean
+  isDragging?: boolean
+  isFirst?: boolean
+  isLast?: boolean
+  sortSaving?: boolean
+  onDragStart?: (documentId: string) => void
+  onDragEnd?: () => void
+  onDropOnDocument?: (documentId: string) => void
+  onMoveUp?: (documentId: string) => void
+  onMoveDown?: (documentId: string) => void
   onOpen?: (document: DocumentRecord) => void
   onFavorite: (document: DocumentRecord, favorite: boolean) => void
   onManage?: (document: DocumentRecord) => void
@@ -2567,8 +2726,39 @@ function DocumentCard({
         ? '前端上传'
         : '同步导入'
   return (
-    <motion.article className="document-card" layout variants={cardMotion} whileHover={liftHover} whileTap={pressTap}>
+    <motion.article
+      className={`document-card${reorderMode ? ' reorderable' : ''}${isDragging ? ' dragging' : ''}`}
+      layout
+      variants={cardMotion}
+      whileHover={liftHover}
+      whileTap={pressTap}
+      draggable={reorderMode && !sortSaving}
+      onDragStart={(event) => {
+        if (!reorderMode || !('dataTransfer' in event)) return
+        const dataTransfer = event.dataTransfer as DataTransfer
+        dataTransfer.effectAllowed = 'move'
+        dataTransfer.setData('text/plain', document.id)
+        onDragStart?.(document.id)
+      }}
+      onDragOver={(event) => {
+        if (!reorderMode || !('dataTransfer' in event)) return
+        event.preventDefault()
+        const dataTransfer = event.dataTransfer as DataTransfer
+        dataTransfer.dropEffect = 'move'
+      }}
+      onDrop={(event) => {
+        if (!reorderMode) return
+        event.preventDefault()
+        onDropOnDocument?.(document.id)
+      }}
+      onDragEnd={() => onDragEnd?.()}
+    >
       <div className="card-topline">
+        {reorderMode ? (
+          <span className="drag-handle" title="拖动调整顺序" aria-label={`拖动排序 ${document.title}`}>
+            <GripVertical size={17} />
+          </span>
+        ) : null}
         <span className="category-dot" style={{ backgroundColor: document.category?.color ?? '#64748B' }} />
         <span>{document.category?.name ?? '未分类'}</span>
         <span className="source-badge">{sourceLabel}</span>
@@ -2629,6 +2819,18 @@ function DocumentCard({
           阅读
         </button>
       )}
+      {reorderMode ? (
+        <div className="mobile-order-controls" aria-label={`${document.title} 排序操作`}>
+          <button className="ghost-button compact" type="button" onClick={() => onMoveUp?.(document.id)} disabled={isFirst || sortSaving}>
+            <ArrowUp size={16} />
+            上移
+          </button>
+          <button className="ghost-button compact" type="button" onClick={() => onMoveDown?.(document.id)} disabled={isLast || sortSaving}>
+            <ArrowDown size={16} />
+            下移
+          </button>
+        </div>
+      ) : null}
     </motion.article>
   )
 }
@@ -3276,10 +3478,18 @@ function AiConfigCenter({
   const passCount = health?.profiles.filter((profile) => profile.status === 'pass').length ?? 0
   const failCount = health?.profiles.filter((profile) => profile.status === 'fail').length ?? 0
   const activeProfiles = featureConfig?.profiles.length ? featureConfig.profiles : profiles
+  const providerTemplates = featureConfig?.providerTemplates ?? []
   const [bindingDraft, setBindingDraft] = useState<Record<AiFeatureId, string | null>>({} as Record<AiFeatureId, string | null>)
   const [statsMode, setStatsMode] = useState<'feature' | 'model' | 'status'>('feature')
   const [providerDraft, setProviderDraft] = useState<AiUserProviderDraft>(() => emptyProviderDraft())
+  const [selectedTemplateId, setSelectedTemplateId] = useState('')
+  const [modelDiscovery, setModelDiscovery] = useState<AiModelDiscoveryResult | null>(null)
+  const [modelLoading, setModelLoading] = useState(false)
+  const [modelError, setModelError] = useState('')
   const featureStats = new Map(featureConfig?.stats.byFeature.map((item) => [item.featureId, item]) ?? [])
+  const discoveredModels = modelDiscovery?.models.length
+    ? modelDiscovery.models
+    : providerTemplates.find((template) => template.id === selectedTemplateId || template.provider === providerDraft.provider)?.models ?? []
   const dirty = Boolean(
     featureConfig?.bindings.some((binding) => (bindingDraft[binding.featureId] ?? null) !== (binding.profileId ?? null)),
   )
@@ -3311,24 +3521,79 @@ function AiConfigCenter({
     onSaveBindings(selectedBindings)
   }
 
+  const applyProviderTemplate = (templateId: string) => {
+    const template = providerTemplates.find((item) => item.id === templateId)
+    setSelectedTemplateId(templateId)
+    setModelError('')
+    if (!template) return
+    const model = template.defaultModel || template.models[0]?.id || ''
+    setProviderDraft((draft) => ({
+      ...draft,
+      label: draft.id ? draft.label : `${template.label} 个人 API`,
+      provider: template.provider,
+      baseUrl: template.baseUrl,
+      model,
+      supportsVision: template.models.some((option) => option.capabilities.includes('vision')),
+      supportsHtmlGeneration: template.models.some((option) => option.capabilities.includes('html')),
+      enabled: true,
+    }))
+    setModelDiscovery({
+      generatedAt: new Date().toISOString(),
+      profileId: null,
+      provider: template.provider,
+      baseUrlHost: template.baseUrl ? safeUiHost(template.baseUrl) : '待填写',
+      models: template.models,
+      cached: true,
+      error: null,
+    })
+  }
+
+  const loadProviderModels = async (force = false) => {
+    setModelLoading(true)
+    setModelError('')
+    try {
+      const result = await fetchAiModelOptions({
+        profileId: providerDraft.id,
+        providerDraft,
+        force,
+      })
+      setModelDiscovery(result)
+      if (!providerDraft.model.trim() && result.models[0]?.id) {
+        setProviderDraft((draft) => ({ ...draft, model: result.models[0].id }))
+      }
+      if (result.error) {
+        setModelError(`自动拉取失败，已显示模板/缓存模型：${result.error}`)
+      }
+    } catch (caught) {
+      setModelError(caught instanceof Error ? caught.message : '模型列表拉取失败，可以先手动填写模型名。')
+    } finally {
+      setModelLoading(false)
+    }
+  }
+
   const editProvider = (profile: AiProfile) => {
     setProviderDraft({
       id: profile.id,
       label: profile.label,
       provider: profile.provider,
-      baseUrl: profile.baseUrlHost ? `https://${profile.baseUrlHost}` : '',
+      baseUrl: profile.baseUrl ?? (profile.baseUrlHost ? `https://${profile.baseUrlHost}` : ''),
       model: profile.model,
       apiKey: '',
       supportsVision: Boolean(profile.supportsVision),
       supportsHtmlGeneration: profile.supportsHtmlGeneration !== false,
       enabled: profile.enabled,
     })
+    setSelectedTemplateId(providerTemplates.find((template) => template.provider === profile.provider)?.id ?? '')
+    setModelDiscovery(null)
+    setModelError('')
   }
 
   const submitProvider = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     onSaveProvider(providerDraft)
     setProviderDraft(emptyProviderDraft())
+    setModelDiscovery(null)
+    setSelectedTemplateId('')
   }
 
   return (
@@ -3368,8 +3633,22 @@ function AiConfigCenter({
         <div className="ai-section-title">
           <div>
             <strong>我的 API 平台</strong>
-            <p>添加自己的 OpenAI-compatible 接口。API Key 只提交给后端一次，加密保存，前端之后不会回显。</p>
+            <p>先选平台模板自动带出 Base URL 和推荐模型；API Key 只提交给后端一次，加密保存，前端之后不会回显。</p>
           </div>
+        </div>
+        <div className="ai-provider-template-grid" aria-label="AI 平台模板">
+          {providerTemplates.map((template) => (
+            <button
+              key={template.id}
+              type="button"
+              className={selectedTemplateId === template.id ? 'ai-provider-template active' : 'ai-provider-template'}
+              onClick={() => applyProviderTemplate(template.id)}
+            >
+              <strong>{template.label}</strong>
+              <span>{template.baseUrl || 'Base URL 需手动填写'}</span>
+              <small>{template.notes}</small>
+            </button>
+          ))}
         </div>
         <form className="ai-provider-form" onSubmit={submitProvider}>
           <label>
@@ -3386,7 +3665,30 @@ function AiConfigCenter({
           </label>
           <label>
             模型
-            <input value={providerDraft.model} onChange={(event) => setProviderDraft((draft) => ({ ...draft, model: event.target.value }))} placeholder="Qwen/Qwen2.5-7B-Instruct" />
+            <div className="ai-model-input-row">
+              <input
+                list="ai-model-options"
+                value={providerDraft.model}
+                onChange={(event) => setProviderDraft((draft) => ({ ...draft, model: event.target.value }))}
+                placeholder="Qwen/Qwen2.5-7B-Instruct"
+              />
+              <button
+                className="ghost-button compact"
+                type="button"
+                onClick={() => void loadProviderModels(true)}
+                disabled={modelLoading || !providerDraft.baseUrl.trim() || (!providerDraft.id && !providerDraft.apiKey?.trim())}
+              >
+                {modelLoading ? <Loader2 className="spin" size={16} /> : <RefreshCcw size={16} />}
+                拉模型
+              </button>
+            </div>
+            <datalist id="ai-model-options">
+              {discoveredModels.map((model) => (
+                <option key={model.id} value={model.id}>
+                  {modelCapabilitySummary(model)}
+                </option>
+              ))}
+            </datalist>
           </label>
           <label>
             API Key
@@ -3408,6 +3710,34 @@ function AiConfigCenter({
               <span>允许用于 HTML 生成</span>
             </label>
           </div>
+          {discoveredModels.length ? (
+            <div className="ai-model-chip-list">
+              {discoveredModels.slice(0, 12).map((model) => (
+                <button
+                  key={model.id}
+                  type="button"
+                  className={providerDraft.model === model.id ? 'active' : undefined}
+                  onClick={() => {
+                    setProviderDraft((draft) => ({
+                      ...draft,
+                      model: model.id,
+                      supportsVision: model.capabilities.includes('vision') || draft.supportsVision,
+                      supportsHtmlGeneration: model.capabilities.includes('html') || draft.supportsHtmlGeneration,
+                    }))
+                  }}
+                >
+                  <strong>{model.label}</strong>
+                  <span>{modelCapabilitySummary(model)}</span>
+                </button>
+              ))}
+            </div>
+          ) : null}
+          {modelDiscovery ? (
+            <p className="ai-model-discovery-note">
+              模型来源：{modelDiscovery.cached ? '缓存/模板' : 'Provider 实时返回'} · Host：{modelDiscovery.baseUrlHost} · {formatDateTime(modelDiscovery.generatedAt)}
+            </p>
+          ) : null}
+          {modelError ? <p className="ai-profile-error">{modelError}</p> : null}
           <div className="ai-config-actions">
             <button className="primary-button compact" type="submit" disabled={providerSaving || !providerDraft.label.trim() || !providerDraft.baseUrl.trim() || !providerDraft.model.trim() || (!providerDraft.id && !providerDraft.apiKey?.trim())}>
               {providerSaving ? <Loader2 className="spin" size={18} /> : <Save size={18} />}
@@ -3436,7 +3766,7 @@ function AiConfigCenter({
             </button>
             <button className="primary-button compact" type="button" onClick={saveBindings} disabled={featureSaving || !dirty || selectedBindings.length === 0}>
               {featureSaving ? <Loader2 className="spin" size={18} /> : <Save size={18} />}
-              保存绑定
+              保存并验证
             </button>
           </div>
         </div>
@@ -3450,9 +3780,11 @@ function AiConfigCenter({
         ) : (
           <div className="ai-feature-grid">
             {featureConfig.features.map((feature) => {
-              const selectedProfileId = bindingDraft[feature.id] ?? featureConfig.bindings.find((binding) => binding.featureId === feature.id)?.profileId ?? activeProfiles[0]?.id ?? ''
+              const selectedBinding = featureConfig.bindings.find((binding) => binding.featureId === feature.id)
+              const selectedProfileId = bindingDraft[feature.id] ?? selectedBinding?.profileId ?? ''
               const selectedProfile = activeProfiles.find((profile) => profile.id === selectedProfileId)
               const stats = featureStats.get(feature.requestType) ?? featureStats.get(feature.id)
+              const mismatch = selectedProfile ? profileCapabilityMismatch(feature.requiredCapability, selectedProfile) : ''
               return (
                 <section className={`ai-feature-card ${feature.status}`} key={feature.id}>
                   <div className="ai-feature-card-head">
@@ -3471,6 +3803,7 @@ function AiConfigCenter({
                       onChange={(event) => updateBinding(feature.id, event.target.value)}
                       disabled={activeProfiles.length === 0 || feature.status === 'not_deployed'}
                     >
+                      <option value="">未绑定：使用系统默认</option>
                       {activeProfiles.map((profile) => (
                         <option key={`${feature.id}-${profile.id}`} value={profile.id}>
                           {profile.label} · {profile.model}
@@ -3481,10 +3814,15 @@ function AiConfigCenter({
                   <div className="ai-feature-meta">
                     <span>函数：{feature.functionName}</span>
                     <span>能力：{capabilityLabel(feature.requiredCapability)}</span>
+                    <span>当前模型：{selectedProfile?.model ?? '未绑定'}</span>
                     <span>Host：{selectedProfile?.baseUrlHost ?? '未公开'}</span>
+                    <span>验证：{validationLabel(selectedBinding)}</span>
+                    <span>实用模型：{selectedBinding?.validatedModel ?? selectedProfile?.model ?? '未验证'}</span>
                     <span>最近调用：{formatDateTime(stats?.lastCalledAt ?? null)}</span>
                     <span>成功/失败：{stats ? `${stats.ok}/${stats.error}` : '0/0'}</span>
                   </div>
+                  {mismatch ? <p className="ai-profile-error">{mismatch}</p> : null}
+                  {selectedBinding?.validationError ? <p className="ai-profile-error">{selectedBinding.validationError}</p> : null}
                 </section>
               )
             })}
@@ -5527,6 +5865,50 @@ function capabilityLabel(capability: 'text' | 'vision' | 'html') {
   return '文本模型'
 }
 
+function modelCapabilitySummary(model: AiModelOption) {
+  const labels = model.capabilities.map((capability) => {
+    if (capability === 'vision') return '视觉'
+    if (capability === 'long_context') return '长上下文'
+    if (capability === 'html') return 'HTML 推荐'
+    return '文本'
+  })
+  return labels.length ? labels.join(' / ') : '能力未知'
+}
+
+function validationLabel(binding: AiFeatureBinding | undefined) {
+  if (!binding?.validationStatus || binding.validationStatus === 'unknown') return '未验证'
+  const prefix = binding.validationStatus === 'pass' ? '已验证可用' : '验证失败'
+  return binding.validatedAt ? `${prefix} · ${formatDateTime(binding.validatedAt)}` : prefix
+}
+
+function profileCapabilityMismatch(capability: 'text' | 'vision' | 'html', profile: AiProfile) {
+  const modelCapabilities = inferUiModelCapabilities(profile.model)
+  if (capability === 'vision' && !profile.supportsVision && !modelCapabilities.includes('vision')) {
+    return '图片识题必须绑定支持 vision input 的模型；当前模型未标记为视觉模型。'
+  }
+  if (capability === 'html' && profile.supportsHtmlGeneration === false) {
+    return '这个模型被标记为不用于 HTML 生成，保存后会验证失败。'
+  }
+  return ''
+}
+
+function inferUiModelCapabilities(model: string): Array<'text' | 'vision' | 'html' | 'long_context'> {
+  const lower = model.toLowerCase()
+  const capabilities: Array<'text' | 'vision' | 'html' | 'long_context'> = ['text']
+  if (/(vision|vl|gpt-4o|omni|gemini|claude-3|qwen.*vl|glm-4v|image)/i.test(lower)) capabilities.push('vision')
+  if (/(instruct|chat|gpt|qwen|deepseek|glm|claude|gemini|moonshot|html|mimo)/i.test(lower)) capabilities.push('html')
+  if (/(128k|32k|long|1m|200k|context|deepseek|moonshot-v1-128k)/i.test(lower)) capabilities.push('long_context')
+  return capabilities
+}
+
+function safeUiHost(value: string) {
+  try {
+    return new URL(value).host
+  } catch {
+    return 'invalid-url'
+  }
+}
+
 function featureLabel(config: AiFeatureConfigPayload, featureId: string) {
   if (featureId === 'health_check') return '健康检查'
   return config.features.find((feature) => feature.requestType === featureId || feature.id === featureId)?.label ?? featureId
@@ -5548,4 +5930,15 @@ function buildSearchSnippet(document: DocumentRecord, query: string) {
   const prefix = start > 0 ? '...' : ''
   const suffix = end < haystack.length ? '...' : ''
   return `${prefix}${haystack.slice(start, end).replace(/\s+/g, ' ').trim()}${suffix}`
+}
+
+function moveDocumentBefore(documents: DocumentRecord[], sourceId: string, targetId: string) {
+  const nextDocuments = [...documents]
+  const sourceIndex = nextDocuments.findIndex((document) => document.id === sourceId)
+  const targetIndex = nextDocuments.findIndex((document) => document.id === targetId)
+  if (sourceIndex < 0 || targetIndex < 0) return nextDocuments
+  const [document] = nextDocuments.splice(sourceIndex, 1)
+  const adjustedTargetIndex = sourceIndex < targetIndex ? targetIndex - 1 : targetIndex
+  nextDocuments.splice(adjustedTargetIndex, 0, document)
+  return nextDocuments
 }

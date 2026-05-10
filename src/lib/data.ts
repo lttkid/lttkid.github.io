@@ -11,7 +11,10 @@ import type {
   AiFeatureBinding,
   AiFeatureConfigPayload,
   AiFeatureDefinition,
+  AiModelDiscoveryResult,
+  AiModelOption,
   AiProfile,
+  AiProviderTemplate,
   AiRequestBreakdown,
   AiUserProviderDraft,
   AppUser,
@@ -47,11 +50,99 @@ const AVATAR_BUCKET = 'user-avatars'
 const MAX_INDEX_CHARS = 200000
 const DEMO_PERSONAS_KEY = 'html-vault-demo-personas'
 const DEMO_USER_PROFILE_KEY = 'html-vault-demo-user-profile'
+const DEMO_DOCUMENT_SORT_KEY = 'html-vault-demo-document-sort'
 const DEFAULT_AVATAR_COLOR = '#5B7CFF'
 const MAX_AVATAR_BYTES = 2 * 1024 * 1024
 const NO_BACKGROUND_COLOR_VALUE = 'transparent'
 const DEMO_AI_BINDINGS_KEY = 'html-vault-demo-ai-feature-bindings'
 const DEMO_AI_PROVIDERS_KEY = 'html-vault-demo-ai-user-providers'
+
+const aiProviderTemplates: AiProviderTemplate[] = [
+  {
+    id: 'siliconflow',
+    label: 'SiliconFlow',
+    provider: 'siliconflow',
+    baseUrl: 'https://api.siliconflow.cn/v1',
+    apiType: 'openai-compatible',
+    defaultModel: 'Qwen/Qwen2.5-7B-Instruct',
+    docsUrl: 'https://docs.siliconflow.cn/',
+    keyHint: '通常以 sk- 开头',
+    notes: '适合 Qwen、DeepSeek、视觉模型等 OpenAI-compatible 模型。',
+    models: [
+      aiModelOption('Qwen/Qwen2.5-7B-Instruct', ['text', 'html']),
+      aiModelOption('Qwen/Qwen2-VL-72B-Instruct', ['text', 'vision', 'html']),
+      aiModelOption('deepseek-ai/DeepSeek-V3', ['text', 'long_context', 'html']),
+    ],
+  },
+  {
+    id: 'deepseek',
+    label: 'DeepSeek',
+    provider: 'deepseek',
+    baseUrl: 'https://api.deepseek.com',
+    apiType: 'openai-compatible',
+    defaultModel: 'deepseek-chat',
+    docsUrl: 'https://api-docs.deepseek.com/',
+    keyHint: 'DeepSeek API Key',
+    notes: '适合阅读摘要、划词解释和长文本推理；视觉任务请绑定其他模型。',
+    models: [
+      aiModelOption('deepseek-chat', ['text', 'long_context', 'html']),
+      aiModelOption('deepseek-reasoner', ['text', 'long_context']),
+    ],
+  },
+  {
+    id: 'dashscope',
+    label: '通义千问 / DashScope',
+    provider: 'dashscope',
+    baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    apiType: 'openai-compatible',
+    defaultModel: 'qwen-plus',
+    docsUrl: 'https://help.aliyun.com/zh/model-studio/',
+    keyHint: 'DashScope API Key',
+    notes: '兼容 OpenAI 接口，视觉任务建议选择 qwen-vl 系列。',
+    models: [
+      aiModelOption('qwen-plus', ['text', 'long_context', 'html']),
+      aiModelOption('qwen-turbo', ['text', 'html']),
+      aiModelOption('qwen-vl-plus', ['text', 'vision', 'html']),
+    ],
+  },
+  {
+    id: 'mimo',
+    label: '小米 MiMo',
+    provider: 'mimo',
+    baseUrl: '',
+    apiType: 'openai-compatible',
+    defaultModel: 'MiMo-7B-RL',
+    docsUrl: 'https://github.com/XiaomiMiMo/MiMo',
+    keyHint: '以实际服务商控制台为准',
+    notes: '目前先作为模型能力模板，Base URL 需要按实际服务商填写。',
+    models: [aiModelOption('MiMo-7B-RL', ['text'])],
+  },
+  {
+    id: 'custom-openai',
+    label: 'OpenAI-compatible 自定义',
+    provider: 'openai-compatible',
+    baseUrl: 'https://api.openai.com/v1',
+    apiType: 'openai-compatible',
+    defaultModel: 'gpt-4o-mini',
+    docsUrl: 'https://platform.openai.com/docs',
+    keyHint: '服务商 API Key',
+    notes: '适合任何兼容 /chat/completions 与 /models 的服务。',
+    models: [
+      aiModelOption('gpt-4o-mini', ['text', 'vision', 'html']),
+      aiModelOption('gpt-4.1-mini', ['text', 'vision', 'long_context', 'html']),
+    ],
+  },
+]
+
+function aiModelOption(id: string, capabilities: AiModelOption['capabilities']): AiModelOption {
+  return {
+    id,
+    label: id,
+    source: 'preset',
+    capabilities,
+    htmlRecommended: capabilities.includes('html'),
+  }
+}
 const AVATAR_MIME_EXTENSIONS: Record<string, string> = {
   'image/png': 'png',
   'image/jpeg': 'jpg',
@@ -141,6 +232,7 @@ function normalizeDocument(row: Record<string, unknown>): DocumentRecord {
     content_text: (row.content_text as string | null | undefined) ?? null,
     word_count: Number(row.word_count ?? 0),
     indexed_at: (row.indexed_at as string | null | undefined) ?? null,
+    sort_order: Number(row.sort_order ?? 2147000000),
     last_scroll: Number(row.last_scroll ?? 0),
   }
 }
@@ -173,6 +265,7 @@ async function hashBuffer(buffer: ArrayBuffer) {
 }
 
 function cloneDemoPayload(): LibraryPayload {
+  applyDemoDocumentSortOrder()
   const documents = demoDocuments.map((document) => ({ ...document }))
   const categories = demoCategories.map((category) => ({ ...category }))
   const personas = readDemoPersonas()
@@ -189,6 +282,27 @@ function cloneDemoPayload(): LibraryPayload {
       failed: 0,
     },
     stats: buildStats(documents, demoSessions, 3),
+  }
+}
+
+function readDemoDocumentSortOrder() {
+  try {
+    const raw = window.localStorage.getItem(DEMO_DOCUMENT_SORT_KEY)
+    return raw ? (JSON.parse(raw) as Record<string, number>) : {}
+  } catch {
+    return {}
+  }
+}
+
+function writeDemoDocumentSortOrder() {
+  const payload = Object.fromEntries(demoDocuments.map((document) => [document.id, document.sort_order]))
+  window.localStorage.setItem(DEMO_DOCUMENT_SORT_KEY, JSON.stringify(payload))
+}
+
+function applyDemoDocumentSortOrder() {
+  const sortOrder = readDemoDocumentSortOrder()
+  for (const document of demoDocuments) {
+    if (typeof sortOrder[document.id] === 'number') document.sort_order = sortOrder[document.id]
   }
 }
 
@@ -532,6 +646,7 @@ export async function loadLibrary(): Promise<LibraryPayload> {
         .from('documents')
         .select('*, categories(id, owner_id, name, color, sort_order, created_at)')
         .eq('archived', false)
+        .order('sort_order', { ascending: true })
         .order('imported_at', { ascending: false }),
       client.from('categories').select('*').order('sort_order', { ascending: true }),
       client.from('personas').select('*').order('created_at', { ascending: false }),
@@ -724,7 +839,7 @@ export async function fetchAiHealth(): Promise<AiHealthResult> {
 
   const client = requireSupabase()
   const { data, error } = await client.functions.invoke<AiHealthResult>('ai-health')
-  if (error) throw error
+  if (error) throw await translateFunctionError(error, 'AI_HEALTH_FAILED')
   if (!data) throw new Error('AI 健康检查没有返回内容。')
   return data
 }
@@ -735,6 +850,7 @@ export async function fetchAiFeatureConfig(): Promise<AiFeatureConfigPayload> {
     return {
       generatedAt: new Date().toISOString(),
       profiles,
+      providerTemplates: aiProviderTemplates,
       features: aiFeatureDefinitions,
       bindings: readDemoAiBindings(),
       stats: {
@@ -765,14 +881,21 @@ export async function fetchAiFeatureConfig(): Promise<AiFeatureConfigPayload> {
 
   const client = requireSupabase()
   const { data, error } = await client.functions.invoke<AiFeatureConfigPayload>('ai-feature-config')
-  if (error) throw error
+  if (error) throw await translateFunctionError(error, 'AI_FEATURE_CONFIG_FAILED')
   if (!data) throw new Error('AI 功能配置接口没有返回内容。')
   return data
 }
 
 export async function saveAiFeatureBindings(bindings: AiFeatureBinding[]): Promise<AiFeatureConfigPayload> {
   if (isDemoMode) {
-    const saved = bindings.map((binding) => ({ ...binding, updatedAt: new Date().toISOString() }))
+    const saved = bindings.map((binding) => ({
+      ...binding,
+      updatedAt: new Date().toISOString(),
+      validationStatus: binding.profileId ? 'pass' as const : 'unknown' as const,
+      validatedAt: binding.profileId ? new Date().toISOString() : null,
+      validatedModel: demoAllAiProfiles().find((profile) => profile.id === binding.profileId)?.model ?? null,
+      validationError: null,
+    }))
     writeDemoAiBindings(saved)
     return fetchAiFeatureConfig()
   }
@@ -786,8 +909,42 @@ export async function saveAiFeatureBindings(bindings: AiFeatureBinding[]): Promi
       })),
     },
   })
-  if (error) throw error
+  if (error) throw await translateFunctionError(error, 'AI_BINDING_SAVE_FAILED')
   if (!data) throw new Error('AI 功能配置保存后没有返回内容。')
+  return data
+}
+
+export async function fetchAiModelOptions(input: {
+  profileId?: string
+  providerDraft?: AiUserProviderDraft
+  force?: boolean
+}): Promise<AiModelDiscoveryResult> {
+  if (isDemoMode) {
+    const template = aiProviderTemplates.find((item) => (
+      item.provider === input.providerDraft?.provider || item.id === input.providerDraft?.provider
+    )) ?? aiProviderTemplates[0]
+    return {
+      generatedAt: new Date().toISOString(),
+      profileId: input.profileId ?? null,
+      provider: input.providerDraft?.provider ?? template.provider,
+      baseUrlHost: safeHost(input.providerDraft?.baseUrl ?? template.baseUrl),
+      models: template.models,
+      cached: !input.force,
+      error: null,
+    }
+  }
+
+  const client = requireSupabase()
+  const { data, error } = await client.functions.invoke<AiModelDiscoveryResult>('ai-feature-config', {
+    body: {
+      action: 'list_models',
+      profileId: input.profileId,
+      providerDraft: input.providerDraft,
+      force: input.force,
+    },
+  })
+  if (error) throw await translateFunctionError(error, 'MODEL_DISCOVERY_FAILED')
+  if (!data) throw new Error('模型列表接口没有返回内容。')
   return data
 }
 
@@ -804,6 +961,7 @@ export async function saveAiUserProvider(draft: AiUserProviderDraft): Promise<Ai
       model: draft.model.trim(),
       enabled: draft.enabled,
       configured: true,
+      baseUrl: draft.baseUrl.trim(),
       baseUrlHost: safeHost(draft.baseUrl),
       keyHint: draft.apiKey ? `${draft.apiKey.slice(0, 3)}...${draft.apiKey.slice(-4)}` : profiles.find((item) => item.id === `user:${id}`)?.keyHint ?? '已保存',
       supportsVision: draft.supportsVision,
@@ -820,7 +978,7 @@ export async function saveAiUserProvider(draft: AiUserProviderDraft): Promise<Ai
       provider: draft,
     },
   })
-  if (error) throw error
+  if (error) throw await translateFunctionError(error, 'AI_PROVIDER_SAVE_FAILED')
   if (!data) throw new Error('AI API 配置保存后没有返回内容。')
   return data
 }
@@ -841,7 +999,7 @@ export async function deleteAiUserProvider(profileId: string): Promise<AiFeature
       providerId: profileId,
     },
   })
-  if (error) throw error
+  if (error) throw await translateFunctionError(error, 'AI_PROVIDER_DELETE_FAILED')
   if (!data) throw new Error('AI API 配置删除后没有返回内容。')
   return data
 }
@@ -852,6 +1010,59 @@ function safeHost(value: string) {
   } catch {
     return 'invalid-url'
   }
+}
+
+type AiFunctionErrorBody = {
+  error?: string
+  code?: string
+  suggestion?: string
+}
+
+async function translateFunctionError(error: unknown, fallbackCode: string) {
+  const rawMessage = error instanceof Error ? error.message : String(error)
+  const context = (error as { context?: unknown })?.context
+  let body: AiFunctionErrorBody | null = null
+
+  if (context instanceof Response) {
+    const text = await context.clone().text().catch(() => '')
+    if (text) {
+      try {
+        body = JSON.parse(text) as AiFunctionErrorBody
+      } catch {
+        body = { error: text }
+      }
+    }
+  }
+
+  const code = body?.code ?? inferClientAiErrorCode(rawMessage, fallbackCode)
+  const message = body?.error ?? rawMessage
+  const suggestion = body?.suggestion ?? aiClientSuggestion(code)
+  return new Error(`[${code}] ${message}\n建议：${suggestion}`)
+}
+
+function inferClientAiErrorCode(message: string, fallbackCode: string) {
+  const lower = message.toLowerCase()
+  if (lower.includes('failed to send a request') || lower.includes('not_found') || lower.includes('404')) return 'FUNCTION_NOT_DEPLOYED'
+  if (lower.includes('timeout') || lower.includes('abort')) return 'MODEL_TIMEOUT'
+  if (lower.includes('401') || lower.includes('403') || lower.includes('unauthorized')) return 'PROVIDER_AUTH_FAILED'
+  if (lower.includes('markdown fences') || lower.includes('<!doctype html>') || lower.includes('output')) return 'MODEL_OUTPUT_INVALID'
+  return fallbackCode
+}
+
+function aiClientSuggestion(code: string) {
+  const suggestions: Record<string, string> = {
+    FUNCTION_NOT_DEPLOYED: '请确认 Supabase Edge Function 已部署，尤其是 ai-feature-config 和 ai-generate-html。',
+    MODEL_TIMEOUT: '模型响应超时。可以换更快模型、缩短需求，或稍后重试。',
+    PROVIDER_AUTH_FAILED: '请检查 Provider API Key、额度和 Base URL，并重新保存配置。',
+    MODEL_OUTPUT_INVALID: '模型输出不是合规单文件 HTML。建议换更强的 HTML 模型或简化生成需求。',
+    MODEL_DISCOVERY_FAILED: '无法自动拉取模型列表，可先使用模板推荐模型或手动填写。',
+    AI_BINDING_SAVE_FAILED: '功能绑定没有保存成功，请刷新配置中心后重试。',
+    AI_PROVIDER_SAVE_FAILED: 'API 平台没有保存成功，请检查 Base URL、模型名和 Key。',
+    AI_PROVIDER_DELETE_FAILED: 'API 平台没有删除成功，请刷新后重试。',
+    AI_FEATURE_CONFIG_FAILED: '请确认 ai-feature-config 已部署并且 migrations 已应用。',
+    AI_HEALTH_FAILED: '请确认 ai-health 已部署，并检查 Supabase 登录态。',
+  }
+  return suggestions[code] ?? '请查看部署中心 AI 健康检查与 ai_requests 日志定位原因。'
 }
 
 export async function fetchDocumentHtml(document: DocumentRecord) {
@@ -1004,7 +1215,7 @@ export async function requestAiHtmlGeneration(request: HtmlGenerationRequest): P
   const { data, error } = await client.functions.invoke<HtmlGenerationResponse>('ai-generate-html', {
     body: request,
   })
-  if (error) throw error
+  if (error) throw await translateFunctionError(error, 'AI_HTML_GENERATION_FAILED')
   if (!data) throw new Error('AI HTML 生成接口没有返回内容。')
   return data
 }
@@ -1046,6 +1257,7 @@ export async function saveGeneratedHtml(user: AppUser, draft: GeneratedHtmlSaveD
       source_modified_at: importedAt,
       imported_at: importedAt,
       updated_at: importedAt,
+      sort_order: 0,
       archived: false,
       favorite: false,
       summary: draft.summary ?? null,
@@ -1106,6 +1318,7 @@ export async function saveGeneratedHtml(user: AppUser, draft: GeneratedHtmlSaveD
       file_hash: hash,
       source_modified_at: importedAt,
       imported_at: importedAt,
+      sort_order: 0,
       archived: false,
       favorite: false,
       summary: draft.summary ?? null,
@@ -1179,6 +1392,7 @@ async function uploadSingleHtmlFile(user: AppUser, file: File, categoryId: strin
         source_modified_at: new Date(file.lastModified || now.getTime()).toISOString(),
         imported_at: importedAt,
         updated_at: importedAt,
+        sort_order: 0,
         archived: false,
         favorite: false,
         summary: null,
@@ -1242,6 +1456,7 @@ async function uploadSingleHtmlFile(user: AppUser, file: File, categoryId: strin
       file_hash: hash,
       source_modified_at: new Date(file.lastModified || now.getTime()).toISOString(),
       imported_at: importedAt,
+      sort_order: 0,
       archived: false,
       favorite: false,
       summary: null,
@@ -1303,6 +1518,31 @@ export async function updateDocumentManagement(document: DocumentRecord, draft: 
   const client = requireSupabase()
   const { error } = await client.from('documents').update(draft).eq('id', document.id)
   if (error) throw error
+}
+
+export async function updateDocumentSortOrder(documents: Array<Pick<DocumentRecord, 'id' | 'sort_order'>>) {
+  if (documents.length === 0) return
+
+  if (isDemoMode) {
+    for (const update of documents) {
+      const document = demoDocuments.find((item) => item.id === update.id)
+      if (document) document.sort_order = update.sort_order
+    }
+    writeDemoDocumentSortOrder()
+    return
+  }
+
+  const client = requireSupabase()
+  const results = await Promise.all(
+    documents.map((document) =>
+      client
+        .from('documents')
+        .update({ sort_order: document.sort_order })
+        .eq('id', document.id),
+    ),
+  )
+  const failed = results.find((result) => result.error)
+  if (failed?.error) throw failed.error
 }
 
 export async function restoreDocument(document: DocumentRecord) {

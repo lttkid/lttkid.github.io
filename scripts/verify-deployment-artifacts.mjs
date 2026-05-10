@@ -64,6 +64,9 @@ check('AI feature binding migration exists', aiFeatureMigration.includes('ai_fea
 const aiUserProvidersMigration = readIfExists('supabase/migrations/008_ai_user_providers.sql')
 check('AI user provider migration exists', aiUserProvidersMigration.includes('ai_user_providers') && aiUserProvidersMigration.includes('api_key_ciphertext') && aiUserProvidersMigration.includes('enable row level security'), 'User API keys must be encrypted server-side and protected by owner RLS.')
 
+const aiObservabilityMigration = readIfExists('supabase/migrations/009_ai_observability_and_model_cache.sql')
+check('AI observability migration exists', aiObservabilityMigration.includes('ai_model_cache') && aiObservabilityMigration.includes('profile_source') && aiObservabilityMigration.includes('validation_status'), 'AI config needs model cache, binding validation, and traceable ai_requests metadata.')
+
 const packageJson = readIfExists('package.json')
 check('Live Supabase verification script exists', packageJson.includes('supabase:live:init'), 'A real Supabase initializer/verifier command should be available.')
 check('Live frontend smoke script exists', packageJson.includes('test:live'), 'A real frontend login/library/reader smoke test should be available.')

@@ -126,7 +126,22 @@ async function checkViewport(browser, viewport) {
     for (const key of Object.keys(window.localStorage)) {
       if (key.startsWith('html-vault-demo-highlights:')) window.localStorage.removeItem(key)
     }
+    window.localStorage.removeItem('html-vault-demo-document-sort')
   })
+  await page.reload({ waitUntil: 'load' })
+  await page.getByRole('heading', { name: 'HTML 文件管理' }).waitFor()
+  await page.getByText('正在调整全局书架顺序').waitFor()
+  if (viewport.width <= 760) {
+    const firstTitleBefore = await page.locator('.document-card h2').first().innerText()
+    const secondTitleBefore = await page.locator('.document-card h2').nth(1).innerText()
+    await page.locator('.document-card').first().getByRole('button', { name: '下移' }).click()
+    await page.getByText('移动排序已保存。').waitFor()
+    assert((await page.locator('.document-card h2').first().innerText()) === secondTitleBefore, 'Mobile move-down did not reorder the first document.')
+    await page.reload({ waitUntil: 'load' })
+    await page.getByRole('heading', { name: 'HTML 文件管理' }).waitFor()
+    assert((await page.locator('.document-card h2').first().innerText()) === secondTitleBefore, 'Manual order was not persisted after reload.')
+    assert((await page.locator('.document-card h2').nth(1).innerText()) === firstTitleBefore, 'Manual order changed the wrong document after reload.')
+  }
   await page.getByRole('button', { name: '上传 HTML' }).waitFor()
   await page.locator('.sidebar .user-avatar.medium').waitFor()
   await page.locator('.companion-dock').waitFor()
@@ -646,11 +661,11 @@ async function checkViewport(browser, viewport) {
   assert((await userApiCard.getByText('3456').count()) >= 1, 'Custom API card did not show a masked key hint.')
   await page.getByText('功能接口绑定').waitFor()
   await page.locator('.ai-feature-card', { hasText: '阅读摘要' }).getByRole('combobox').selectOption({ label: `${userApiLabel} · smoke-model-${viewport.width}` })
-  await page.getByRole('button', { name: '保存绑定' }).click()
+  await page.getByRole('button', { name: '保存并验证' }).click()
   await page.locator('.ai-feature-card', { hasText: '虚拟人物对话' }).getByText('未部署').waitFor()
   await page.getByText('调用统计').waitFor()
   await page.getByRole('button', { name: '测试 AI 连接' }).click()
-  await page.getByText('api.siliconflow.cn').waitFor()
+  await page.locator('.ai-profile-grid').getByText('Host：api.siliconflow.cn').waitFor()
   assert((await page.locator('.ai-profile-grid').getByText('vision.demo.local').count()) >= 1, 'AI config did not show the vision model host.')
   assert((await page.locator('.ai-profile-card.pass').count()) >= 1, 'AI health check did not mark any profile as available.')
 

@@ -1,5 +1,5 @@
 import { corsHeaders, jsonResponse } from '../_shared/cors.ts'
-import { chatCompletion, requireUser, resolveProfile, resolveProfileForFeature, sanitizeAiError, stripHtml } from '../_shared/ai.ts'
+import { chatCompletionWithMeta, errorPayload, requireUser, resolveProfile, resolveProfileForFeature, stripHtml } from '../_shared/ai.ts'
 
 type SummaryBody = {
   documentId: string
@@ -11,6 +11,7 @@ Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
 
   const started = new Date().toISOString()
+  const startedMs = Date.now()
   let supabaseForLog: Awaited<ReturnType<typeof requireUser>>['supabase'] | null = null
   let userId: string | null = null
   let bodyForLog: Partial<SummaryBody> = {}
@@ -40,7 +41,7 @@ Deno.serve(async (req) => {
     if (fileError) throw fileError
 
     const text = stripHtml(await file.text()).slice(0, 12000)
-    const answer = await chatCompletion({
+    const completion = await chatCompletionWithMeta({
       profile,
       messages: [
         {
@@ -56,6 +57,7 @@ Deno.serve(async (req) => {
         },
       ],
     })
+    const answer = completion.answer
 
     await Promise.all([
       supabase.from('documents').update({ summary: answer }).eq('id', body.documentId),
@@ -64,29 +66,43 @@ Deno.serve(async (req) => {
         document_id: body.documentId,
         persona_id: body.personaId ?? null,
         request_type: 'summarize',
+        feature_id: 'summarize',
         provider: profile.provider,
         model: profile.model,
+        used_model: completion.usedModel,
+        profile_id: profile.id,
+        provider_id: profile.userProviderId ?? profile.id,
+        profile_source: profile.source ?? 'server',
         status: 'ok',
+        latency_ms: Date.now() - startedMs,
       }),
     ])
 
-    return jsonResponse({ answer, model: profile.model })
+    return jsonResponse({ answer, model: completion.usedModel })
   } catch (error) {
     if (error instanceof Response) return error
-    const sanitized = sanitizeAiError(error)
+    const payload = errorPayload(error)
+    const sanitized = payload.error
     if (supabaseForLog && userId && profileForLog) {
       await supabaseForLog.from('ai_requests').insert({
         owner_id: userId,
         document_id: bodyForLog.documentId ?? null,
         persona_id: bodyForLog.personaId ?? null,
         request_type: 'summarize',
+        feature_id: 'summarize',
         provider: profileForLog.provider,
         model: profileForLog.model,
+        used_model: profileForLog.model,
+        profile_id: profileForLog.id,
+        provider_id: profileForLog.userProviderId ?? profileForLog.id,
+        profile_source: profileForLog.source ?? 'server',
         status: 'error',
+        error_code: payload.code,
         error_message: sanitized,
+        latency_ms: Date.now() - startedMs,
         created_at: started,
       })
     }
-    return jsonResponse({ error: sanitized }, 500)
+    return jsonResponse(payload, payload.code === 'MODEL_TIMEOUT' ? 504 : 500)
   }
 })

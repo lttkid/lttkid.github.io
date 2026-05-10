@@ -1,5 +1,5 @@
 import { corsHeaders, jsonResponse } from '../_shared/cors.ts'
-import { chatCompletion, requireUser, resolveProfile, resolveProfileForFeature, sanitizeAiError } from '../_shared/ai.ts'
+import { AiFunctionError, chatCompletionWithMeta, errorPayload, requireUser, resolveProfile, resolveProfileForFeature } from '../_shared/ai.ts'
 
 type HtmlGenerationType = 'learning' | 'animation' | 'interactive' | 'game' | 'general'
 type HtmlGenerationMode = 'create' | 'revise'
@@ -70,6 +70,7 @@ Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
 
   const started = new Date().toISOString()
+  const startedMs = Date.now()
   let supabaseForLog: Awaited<ReturnType<typeof requireUser>>['supabase'] | null = null
   let userId: string | null = null
   let bodyForLog: Partial<GenerateBody> = {}
@@ -91,6 +92,13 @@ Deno.serve(async (req) => {
     if (!profile) return jsonResponse({ error: 'No AI profile configured.' }, 500)
 
     const normalized = normalizeBody(body)
+    const featureId = normalized.image ? 'image_question' : 'generate_html'
+    if (normalized.image && !profile.supportsVision && !/vision|vl|gpt-4o|omni|gemini|glm-4v|qwen.*vl/i.test(profile.model)) {
+      throw new AiFunctionError('MODEL_NOT_CONFIGURED', '图片识题需要绑定支持视觉输入的模型。请到 AI 配置中心选择 vision 模型。', 400)
+    }
+    if (profile.supportsHtmlGeneration === false) {
+      throw new AiFunctionError('MODEL_NOT_CONFIGURED', '当前模型被标记为不用于 HTML 生成，请更换绑定模型。', 400)
+    }
     const [{ data: persona }] = await Promise.all([
       normalized.personaId
         ? supabase.from('personas').select('id,tone,system_prompt').eq('id', normalized.personaId).single()
@@ -123,7 +131,7 @@ Deno.serve(async (req) => {
       .filter(Boolean)
       .join('\n\n')
 
-    const answer = await chatCompletion({
+    const completion = await chatCompletionWithMeta({
       profile,
       temperature: normalized.mode === 'revise' ? 0.24 : 0.38,
       maxTokens: 14000,
@@ -141,7 +149,7 @@ Deno.serve(async (req) => {
     })
 
     const html = await validateOrRepairGeneratedHtml({
-      answer,
+      answer: completion.answer,
       profile,
       systemPrompt,
       userPrompt,
@@ -153,10 +161,16 @@ Deno.serve(async (req) => {
       owner_id: user.id,
       persona_id: normalized.personaId ?? null,
       request_type: 'generate_html',
+      feature_id: featureId,
       provider: profile.provider,
       model: profile.model,
+      used_model: completion.usedModel,
+      profile_id: profile.id,
+      provider_id: profile.userProviderId ?? profile.id,
+      profile_source: profile.source ?? 'server',
       selected_text: normalized.brief.slice(0, 2000),
       status: 'ok',
+      latency_ms: Date.now() - startedMs,
       created_at: started,
     })
 
@@ -165,26 +179,38 @@ Deno.serve(async (req) => {
       html,
       summary,
       type: normalized.type,
-      model: profile.model,
+      model: completion.usedModel,
+      profileId: profile.id,
+      provider: profile.provider,
+      source: profile.source ?? 'server',
       promptVersion: PROMPT_VERSION,
     })
   } catch (error) {
     if (error instanceof Response) return error
-    const sanitized = sanitizeAiError(error)
+    const payload = errorPayload(error)
+    const sanitized = payload.error
     if (supabaseForLog && userId && profileForLog) {
       await supabaseForLog.from('ai_requests').insert({
         owner_id: userId,
         persona_id: bodyForLog.personaId ?? null,
         request_type: 'generate_html',
+        feature_id: bodyForLog.image ? 'image_question' : 'generate_html',
         provider: profileForLog.provider,
         model: profileForLog.model,
+        used_model: profileForLog.model,
+        profile_id: profileForLog.id,
+        provider_id: profileForLog.userProviderId ?? profileForLog.id,
+        profile_source: profileForLog.source ?? 'server',
         selected_text: bodyForLog.brief?.slice(0, 2000) ?? null,
         status: 'error',
+        error_code: payload.code,
         error_message: sanitized,
+        latency_ms: Date.now() - startedMs,
         created_at: started,
       })
     }
-    return jsonResponse({ error: sanitized }, 500)
+    const status = payload.code === 'MODEL_TIMEOUT' ? 504 : payload.code === 'MODEL_NOT_CONFIGURED' ? 400 : 500
+    return jsonResponse(payload, status)
   }
 })
 
@@ -260,13 +286,13 @@ function buildUserPrompt(
 
 function validateGeneratedHtml(answer: string) {
   const html = String(answer ?? '').trim()
-  if (!html) throw new Error('AI provider returned an empty HTML answer.')
-  if (/^```/m.test(html) || /```/.test(html)) throw new Error('AI output contained Markdown fences instead of raw HTML.')
-  if (!/^<!doctype html>/i.test(html)) throw new Error('AI output must start with <!doctype html>.')
-  if (!/<html\b[^>]*lang=["']zh-CN["'][^>]*>/i.test(html)) throw new Error('AI output must include <html lang="zh-CN">.')
-  if (!/<title>[\s\S]*?<\/title>/i.test(html)) throw new Error('AI output must include a title.')
-  if (!/<style[\s\S]*?<\/style>/i.test(html)) throw new Error('AI output must include inline styles.')
-  if (!/<\/html>\s*$/i.test(html)) throw new Error('AI output must end with </html>.')
+  if (!html) throw new AiFunctionError('MODEL_OUTPUT_INVALID', 'AI provider returned an empty HTML answer.')
+  if (/^```/m.test(html) || /```/.test(html)) throw new AiFunctionError('MODEL_OUTPUT_INVALID', 'AI output contained Markdown fences instead of raw HTML.')
+  if (!/^<!doctype html>/i.test(html)) throw new AiFunctionError('MODEL_OUTPUT_INVALID', 'AI output must start with <!doctype html>.')
+  if (!/<html\b[^>]*lang=["']zh-CN["'][^>]*>/i.test(html)) throw new AiFunctionError('MODEL_OUTPUT_INVALID', 'AI output must include <html lang="zh-CN">.')
+  if (!/<title>[\s\S]*?<\/title>/i.test(html)) throw new AiFunctionError('MODEL_OUTPUT_INVALID', 'AI output must include a title.')
+  if (!/<style[\s\S]*?<\/style>/i.test(html)) throw new AiFunctionError('MODEL_OUTPUT_INVALID', 'AI output must include inline styles.')
+  if (!/<\/html>\s*$/i.test(html)) throw new AiFunctionError('MODEL_OUTPUT_INVALID', 'AI output must end with </html>.')
 
   const forbidden: Array<[RegExp, string]> = [
     [/<script\b[^>]*\bsrc\s*=/i, 'External scripts are not allowed.'],
@@ -279,7 +305,7 @@ function validateGeneratedHtml(answer: string) {
     [/\bdocument\.cookie\b/i, 'Cookies are not allowed.'],
   ]
   const match = forbidden.find(([pattern]) => pattern.test(html))
-  if (match) throw new Error(match[1])
+  if (match) throw new AiFunctionError('MODEL_OUTPUT_INVALID', match[1])
   return html
 }
 
@@ -298,7 +324,7 @@ async function validateOrRepairGeneratedHtml({
     return validateGeneratedHtml(answer)
   } catch (error) {
     const repairReason = error instanceof Error ? error.message : String(error)
-    const repaired = await chatCompletion({
+    const repaired = await chatCompletionWithMeta({
       profile,
       temperature: 0.16,
       maxTokens: 14000,
@@ -320,7 +346,7 @@ async function validateOrRepairGeneratedHtml({
         },
       ],
     })
-    return validateGeneratedHtml(repaired)
+    return validateGeneratedHtml(repaired.answer)
   }
 }
 

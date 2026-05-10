@@ -44,6 +44,7 @@ create table if not exists public.documents (
   source_modified_at timestamptz,
   imported_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
+  sort_order integer not null default 2147000000,
   archived boolean not null default false,
   favorite boolean not null default false,
   summary text,
@@ -61,7 +62,20 @@ create table if not exists public.documents (
 alter table if exists public.documents
   add column if not exists content_text text,
   add column if not exists word_count integer not null default 0,
-  add column if not exists indexed_at timestamptz;
+  add column if not exists indexed_at timestamptz,
+  add column if not exists sort_order integer not null default 2147000000;
+
+with ranked_documents as (
+  select
+    id,
+    row_number() over (partition by owner_id order by imported_at desc, title asc) * 1000 as next_sort_order
+  from public.documents
+)
+update public.documents
+set sort_order = ranked_documents.next_sort_order
+from ranked_documents
+where public.documents.id = ranked_documents.id
+  and public.documents.sort_order in (100000, 2147000000);
 
 create table if not exists public.document_tags (
   owner_id uuid not null references auth.users(id) on delete cascade,
@@ -136,6 +150,7 @@ create table if not exists public.ai_requests (
 
 create index if not exists documents_owner_imported_idx on public.documents (owner_id, imported_at desc);
 create index if not exists documents_owner_modified_idx on public.documents (owner_id, source_modified_at desc);
+create index if not exists documents_owner_sort_idx on public.documents (owner_id, archived, sort_order asc, imported_at desc);
 create index if not exists reading_sessions_owner_started_idx on public.reading_sessions (owner_id, started_at desc);
 create index if not exists ai_requests_owner_created_idx on public.ai_requests (owner_id, created_at desc);
 

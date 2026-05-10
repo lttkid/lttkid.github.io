@@ -221,7 +221,7 @@ async function getExistingDocument(storagePath) {
   if (!supabase) return null
   const { data, error } = await supabase
     .from('documents')
-    .select('id,file_hash,imported_at')
+    .select('id,file_hash,imported_at,sort_order')
     .eq('owner_id', OWNER_USER_ID)
     .eq('storage_path', storagePath)
     .maybeSingle()
@@ -294,6 +294,7 @@ async function syncFile(filePath, index) {
 
   if (!existing?.imported_at) {
     record.imported_at = new Date().toISOString()
+    record.sort_order = (index + 1) * 1000
   }
 
   const { error: upsertError } = await supabase.from('documents').upsert(record, { onConflict: 'owner_id,storage_path' })
