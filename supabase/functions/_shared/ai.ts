@@ -36,6 +36,7 @@ export type AiProviderTemplate = {
   id: string
   label: string
   provider: string
+  icon: string
   baseUrl: string
   apiType: 'openai-compatible'
   defaultModel: string
@@ -78,6 +79,7 @@ export const providerTemplates: AiProviderTemplate[] = [
     id: 'siliconflow',
     label: 'SiliconFlow',
     provider: 'siliconflow',
+    icon: '/provider-icons/siliconflow.svg',
     baseUrl: 'https://api.siliconflow.cn/v1',
     apiType: 'openai-compatible',
     defaultModel: 'Qwen/Qwen2.5-7B-Instruct',
@@ -95,6 +97,7 @@ export const providerTemplates: AiProviderTemplate[] = [
     id: 'deepseek',
     label: 'DeepSeek',
     provider: 'deepseek',
+    icon: '/provider-icons/deepseek.svg',
     baseUrl: 'https://api.deepseek.com',
     apiType: 'openai-compatible',
     defaultModel: 'deepseek-chat',
@@ -110,6 +113,7 @@ export const providerTemplates: AiProviderTemplate[] = [
     id: 'dashscope',
     label: '通义千问 / DashScope',
     provider: 'dashscope',
+    icon: '/provider-icons/dashscope.svg',
     baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
     apiType: 'openai-compatible',
     defaultModel: 'qwen-plus',
@@ -127,6 +131,7 @@ export const providerTemplates: AiProviderTemplate[] = [
     id: 'mimo',
     label: '小米 MiMo',
     provider: 'mimo',
+    icon: '/provider-icons/mimo.svg',
     baseUrl: '',
     apiType: 'openai-compatible',
     defaultModel: 'MiMo-7B-RL',
@@ -141,6 +146,7 @@ export const providerTemplates: AiProviderTemplate[] = [
     id: 'openrouter',
     label: 'OpenRouter',
     provider: 'openrouter',
+    icon: '/provider-icons/openrouter.svg',
     baseUrl: 'https://openrouter.ai/api/v1',
     apiType: 'openai-compatible',
     defaultModel: 'openai/gpt-4o-mini',
@@ -157,6 +163,7 @@ export const providerTemplates: AiProviderTemplate[] = [
     id: 'zhipu',
     label: '智谱 GLM',
     provider: 'zhipu',
+    icon: '/provider-icons/zhipu.svg',
     baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
     apiType: 'openai-compatible',
     defaultModel: 'glm-4-flash',
@@ -173,6 +180,7 @@ export const providerTemplates: AiProviderTemplate[] = [
     id: 'volcengine',
     label: '火山方舟',
     provider: 'volcengine',
+    icon: '/provider-icons/volcengine.svg',
     baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
     apiType: 'openai-compatible',
     defaultModel: '',
@@ -187,6 +195,7 @@ export const providerTemplates: AiProviderTemplate[] = [
     id: 'moonshot',
     label: '月之暗面 Kimi',
     provider: 'moonshot',
+    icon: '/provider-icons/moonshot.svg',
     baseUrl: 'https://api.moonshot.cn/v1',
     apiType: 'openai-compatible',
     defaultModel: 'moonshot-v1-8k',
@@ -203,6 +212,7 @@ export const providerTemplates: AiProviderTemplate[] = [
     id: 'custom-openai',
     label: 'OpenAI-compatible 自定义',
     provider: 'openai-compatible',
+    icon: '/provider-icons/openai-compatible.svg',
     baseUrl: 'https://api.openai.com/v1',
     apiType: 'openai-compatible',
     defaultModel: 'gpt-4o-mini',
@@ -570,7 +580,7 @@ export function errorPayload(error: unknown, fallbackStatus = 500) {
 
 export function errorSuggestion(code: AiErrorCode) {
   const suggestions: Record<AiErrorCode, string> = {
-    PROVIDER_AUTH_FAILED: '请检查 API Key 是否正确、额度是否可用，或重新保存该 Provider。',
+    PROVIDER_AUTH_FAILED: 'API Key 认证失败。请检查当前平台是否正确、Key 是否来自该平台、Base URL 是否匹配、Key 是否过期，以及该平台是否支持兼容的 /models 接口。',
     MODEL_TIMEOUT: '模型响应超时。可以换更快的模型、缩短需求，或稍后重试。',
     MODEL_OUTPUT_INVALID: '模型输出不是合规的单文件 HTML。系统已尝试修复；建议换更强的 HTML 生成模型或简化需求。',
     PROVIDER_UNAVAILABLE: '模型服务暂时不可用或被限流。请稍后重试，或切换到其他 Provider。',

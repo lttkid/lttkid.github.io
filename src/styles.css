@@ -1425,6 +1425,28 @@ input[type="color"] {
   text-align: left;
 }
 
+.ai-provider-template-head,
+.ai-profile-title,
+.ai-template-detail-head {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.ai-provider-template-head img,
+.ai-profile-title img,
+.ai-template-detail-head img {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+}
+
+.ai-provider-template-head strong,
+.ai-profile-title strong,
+.ai-template-detail-head strong {
+  margin: 0;
+}
+
 .ai-provider-template strong {
   color: var(--text);
 }
@@ -1438,6 +1460,47 @@ input[type="color"] {
 .ai-provider-template.active {
   border-color: rgba(37, 99, 235, 0.42);
   background: linear-gradient(135deg, rgba(219, 234, 254, 0.9), rgba(255, 255, 255, 0.82));
+}
+
+.ai-template-detail {
+  display: grid;
+  gap: 12px;
+  border: 1px solid rgba(37, 99, 235, 0.18);
+  border-radius: 14px;
+  padding: 14px;
+  background:
+    linear-gradient(135deg, rgba(239, 246, 255, 0.72), rgba(255, 255, 255, 0.84)),
+    rgba(255, 255, 255, 0.78);
+}
+
+.ai-template-detail-head > div {
+  display: grid;
+  gap: 4px;
+}
+
+.ai-template-detail-head span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.ai-template-detail p {
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.ai-template-detail-meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 12px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.inline-link-button {
+  width: auto;
+  justify-self: start;
+  text-decoration: none;
 }
 
 .ai-provider-form label {
@@ -1591,6 +1654,36 @@ input[type="color"] {
 
 .ai-profile-head strong {
   display: block;
+}
+
+.ai-profile-title {
+  min-width: 0;
+}
+
+.ai-profile-title > div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.ai-profile-title span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-provider-fallback-icon {
+  display: inline-grid;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 12px;
+  color: #fff;
+  background: linear-gradient(135deg, var(--blue), var(--green));
+  font-size: 13px;
+  font-weight: 900;
+  text-transform: uppercase;
 }
 
 .ai-profile-head span,
@@ -4697,6 +4790,11 @@ select option {
 
   .ai-feature-meta,
   .ai-stat-row {
+    grid-template-columns: 1fr;
+  }
+
+  .ai-provider-template-grid,
+  .ai-template-detail-meta {
     grid-template-columns: 1fr;
   }
 

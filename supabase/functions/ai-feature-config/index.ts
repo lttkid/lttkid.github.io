@@ -156,23 +156,45 @@ async function saveBindings(
   const profiles = await getAvailableProfiles(supabase, userId)
   const profileIds = new Set(profiles.map((profile) => profile.id))
   const validFeatures = new Set(features.map((feature) => feature.id))
-  const rows = bindings
+  const normalized = bindings
     .map((binding) => ({
-      owner_id: userId,
       feature_id: String(binding.featureId ?? '').trim() as AiFeatureId,
-      profile_id: String(binding.profileId ?? '').trim(),
+      profile_id: String(binding.profileId ?? '').trim() || null,
     }))
-    .filter((binding) => validFeatures.has(binding.feature_id) && profileIds.has(binding.profile_id))
+    .filter((binding) => validFeatures.has(binding.feature_id))
 
-  if (rows.length === 0) {
+  if (normalized.length === 0) {
     throw new Error('No valid AI feature bindings to save.')
   }
 
-  const { error } = await supabase.from('ai_feature_bindings').upsert(rows, {
-    onConflict: 'owner_id,feature_id',
-  })
-  if (error) throw error
-  return rows.map((row) => ({ featureId: row.feature_id, profileId: row.profile_id }))
+  const boundRows = normalized
+    .filter((binding) => binding.profile_id && profileIds.has(binding.profile_id))
+    .map((binding) => ({
+      owner_id: userId,
+      feature_id: binding.feature_id,
+      profile_id: binding.profile_id!,
+    }))
+  const clearedFeatureIds = normalized
+    .filter((binding) => !binding.profile_id || !profileIds.has(binding.profile_id))
+    .map((binding) => binding.feature_id)
+
+  if (clearedFeatureIds.length > 0) {
+    const { error } = await supabase
+      .from('ai_feature_bindings')
+      .delete()
+      .eq('owner_id', userId)
+      .in('feature_id', clearedFeatureIds)
+    if (error) throw error
+  }
+
+  if (boundRows.length > 0) {
+    const { error } = await supabase.from('ai_feature_bindings').upsert(boundRows, {
+      onConflict: 'owner_id,feature_id',
+    })
+    if (error) throw error
+  }
+
+  return normalized.map((binding) => ({ featureId: binding.feature_id, profileId: binding.profile_id }))
 }
 
 async function upsertUserProvider(
@@ -318,16 +340,19 @@ function normalizeBindings(rows: BindingRow[] | null, profileIds: string[]) {
 function buildStats(rows: Array<Record<string, unknown>>) {
   const byFeature = new Map<string, ReturnType<typeof createStatBucket>>()
   const byModel = new Map<string, ReturnType<typeof createStatBucket>>()
+  const byProfile = new Map<string, ReturnType<typeof createStatBucket>>()
   const byStatus = new Map<string, number>()
 
   for (const row of rows) {
     const requestType = String(row.feature_id ?? row.request_type ?? 'unknown')
     const model = String(row.used_model ?? row.model ?? 'unknown')
+    const profileId = String(row.profile_id ?? '').trim()
     const status = String(row.status ?? 'unknown')
     const createdAt = String(row.created_at ?? '')
 
     bumpBucket(byFeature, requestType, status, createdAt)
     bumpBucket(byModel, model, status, createdAt)
+    if (profileId) bumpBucket(byProfile, profileId, status, createdAt)
     byStatus.set(status, (byStatus.get(status) ?? 0) + 1)
   }
 
@@ -335,6 +360,7 @@ function buildStats(rows: Array<Record<string, unknown>>) {
     total: rows.length,
     byFeature: Array.from(byFeature, ([featureId, bucket]) => ({ featureId, ...bucket })),
     byModel: Array.from(byModel, ([model, bucket]) => ({ model, ...bucket })),
+    byProfile: Array.from(byProfile, ([profileId, bucket]) => ({ profileId, ...bucket })),
     byStatus: Array.from(byStatus, ([status, count]) => ({ status, count })),
   }
 }
@@ -348,24 +374,31 @@ async function listModelsForRequest(
   const profile = await resolveModelDiscoveryProfile(supabase, userId, body)
   const runtimeHost = safeHost(profile.baseUrl ?? '')
   const cacheKey = modelCacheKey(profile.provider, profile.baseUrl ?? '', profile.id)
+  const templateModels = fallbackModelsForProvider(profile.provider)
+  const { data: cacheRow } = await supabase
+    .from('ai_model_cache')
+    .select('models,error_message,fetched_at,expires_at')
+    .eq('owner_id', userId)
+    .eq('cache_key', cacheKey)
+    .maybeSingle()
+  const cachedModels = cacheRow?.models
+    ? (Array.isArray(cacheRow.models) ? cacheRow.models : JSON.parse(String(cacheRow.models ?? '[]'))) as AiModelOption[]
+    : []
 
   if (!body.force) {
-    const { data } = await supabase
-      .from('ai_model_cache')
-      .select('models,error_message,fetched_at,expires_at')
-      .eq('owner_id', userId)
-      .eq('cache_key', cacheKey)
-      .maybeSingle()
-    if (data?.models && String(data.expires_at ?? '') > generatedAt) {
-      const cachedModels = Array.isArray(data.models) ? data.models : JSON.parse(String(data.models ?? '[]'))
+    if (cachedModels.length > 0 && String(cacheRow?.expires_at ?? '') > generatedAt) {
       return {
         generatedAt,
         profileId: profile.id.startsWith('draft:') ? null : profile.id,
         provider: profile.provider,
         baseUrlHost: runtimeHost,
-        models: cachedModels as AiModelOption[],
+        models: cachedModels,
         cached: true,
-        error: data.error_message ?? null,
+        source: 'cache',
+        validated: false,
+        error: cacheRow?.error_message ?? null,
+        errorCode: null,
+        suggestion: cacheRow?.error_message ? '当前显示的是缓存模型，尚未重新验证当前 API Key。' : null,
       }
     }
   }
@@ -380,11 +413,17 @@ async function listModelsForRequest(
       baseUrlHost: runtimeHost,
       models,
       cached: false,
+      source: 'provider',
+      validated: true,
       error: null,
+      errorCode: null,
+      suggestion: null,
     }
   } catch (error) {
-    const sanitized = sanitizeAiError(error)
-    const fallbackModels = fallbackModelsForProvider(profile.provider)
+    const payload = errorPayload(error)
+    const sanitized = payload.error
+    const fallbackModels = cachedModels.length > 0 ? cachedModels : templateModels
+    const source = cachedModels.length > 0 ? 'cache' : 'template'
     await upsertModelCache(supabase, userId, cacheKey, profile.provider, runtimeHost, fallbackModels, sanitized)
     return {
       generatedAt,
@@ -392,8 +431,14 @@ async function listModelsForRequest(
       provider: profile.provider,
       baseUrlHost: runtimeHost,
       models: fallbackModels,
-      cached: false,
+      cached: source === 'cache',
+      source,
+      validated: false,
       error: sanitized,
+      errorCode: payload.code,
+      suggestion: source === 'cache'
+        ? `实时拉取失败：${payload.suggestion} 当前显示的是缓存模型，尚未重新验证当前 API Key。`
+        : `实时拉取失败：${payload.suggestion} 当前显示的是平台模板模型，尚未验证可用。`,
     }
   }
 }

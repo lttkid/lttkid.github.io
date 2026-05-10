@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title">
+  <title>OpenRouter</title>
+  <defs>
+    <linearGradient id="g" x1="0%" x2="100%" y1="0%" y2="100%">
+      <stop offset="0%" stop-color="#111827" />
+      <stop offset="100%" stop-color="#6366f1" />
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="18" fill="url(#g)" />
+  <path d="M20 22h14c8 0 14 5 14 10s-6 10-14 10H20V22Zm12 8h-4v4h4c4 0 7-1 7-2s-3-2-7-2Z" fill="#fff" />
+  <path d="M36 18 48 28 36 46" fill="none" stroke="#a5b4fc" stroke-linecap="round" stroke-linejoin="round" stroke-width="4" />
+</svg>

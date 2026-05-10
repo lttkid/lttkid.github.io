@@ -28,7 +28,10 @@ Deno.serve(async (req) => {
   const generatedAt = new Date().toISOString()
   try {
     const { supabase, user } = await requireUser(req)
-    const profiles = await getAvailableProfiles(supabase, user.id)
+    const requestedProfileId = await readRequestedProfileId(req)
+    const profiles = (await getAvailableProfiles(supabase, user.id)).filter((profile) => (
+      requestedProfileId ? profile.id === requestedProfileId : true
+    ))
 
     const results = await Promise.all(
       profiles.map(async (profile): Promise<HealthProfile> => {
@@ -173,3 +176,15 @@ Deno.serve(async (req) => {
     return jsonResponse(errorPayload(error), 500)
   }
 })
+
+async function readRequestedProfileId(req: Request) {
+  if (req.method !== 'POST') return ''
+  try {
+    const raw = await req.text()
+    if (!raw.trim()) return ''
+    const parsed = JSON.parse(raw) as { profileId?: string }
+    return String(parsed.profileId ?? '').trim()
+  } catch {
+    return ''
+  }
+}

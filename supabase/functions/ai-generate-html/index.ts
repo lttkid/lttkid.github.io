@@ -26,6 +26,9 @@ const MAX_BRIEF_CHARS = 4000
 const MAX_HTML_CHARS = 180000
 const MAX_IMAGE_BASE64_CHARS = 7_000_000
 const supportedImageTypes = new Set(['image/png', 'image/jpeg', 'image/webp'])
+const PRIMARY_COMPLETION_TIMEOUT_MS = 28000
+const REPAIR_COMPLETION_TIMEOUT_MS = 18000
+const GENERATION_MAX_TOKENS = 12000
 
 const generationPresets: Record<HtmlGenerationType, { label: string; instruction: string }> = {
   learning: {
@@ -134,8 +137,9 @@ Deno.serve(async (req) => {
     const completion = await chatCompletionWithMeta({
       profile,
       temperature: normalized.mode === 'revise' ? 0.24 : 0.38,
-      maxTokens: 14000,
-      timeoutMs: 90000,
+      // Keep the first generation attempt below the Edge gateway timeout budget.
+      maxTokens: GENERATION_MAX_TOKENS,
+      timeoutMs: PRIMARY_COMPLETION_TIMEOUT_MS,
       messages: [
         {
           role: 'system',
@@ -327,8 +331,9 @@ async function validateOrRepairGeneratedHtml({
     const repaired = await chatCompletionWithMeta({
       profile,
       temperature: 0.16,
-      maxTokens: 14000,
-      timeoutMs: 90000,
+      // Leave room for validation and response serialization when a repair pass is needed.
+      maxTokens: GENERATION_MAX_TOKENS,
+      timeoutMs: REPAIR_COMPLETION_TIMEOUT_MS,
       messages: [
         {
           role: 'system',

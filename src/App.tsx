@@ -3222,6 +3222,8 @@ function DeployCenter({
   const [aiFeatureSaving, setAiFeatureSaving] = useState(false)
   const [aiProviderSaving, setAiProviderSaving] = useState(false)
   const [aiFeatureError, setAiFeatureError] = useState('')
+  const [aiFeatureNotice, setAiFeatureNotice] = useState('')
+  const [aiFeatureNoticeTone, setAiFeatureNoticeTone] = useState<'success' | 'warning'>('success')
 
   const run = useCallback(async () => {
     setLoading(true)
@@ -3239,11 +3241,12 @@ function DeployCenter({
     void run()
   }, [run])
 
-  const runAiHealth = useCallback(async () => {
+  const runAiHealth = useCallback(async (profileId?: string) => {
     setAiHealthLoading(true)
     setAiHealthError('')
     try {
-      setAiHealth(await fetchAiHealth())
+      const result = await fetchAiHealth(profileId)
+      setAiHealth((current) => mergeAiHealthResults(current, result))
     } catch (caught) {
       setAiHealthError(caught instanceof Error ? caught.message : 'AI 健康检查失败。')
     } finally {
@@ -3270,8 +3273,12 @@ function DeployCenter({
   const saveAiBindings = useCallback(async (bindings: AiFeatureBinding[]) => {
     setAiFeatureSaving(true)
     setAiFeatureError('')
+    setAiFeatureNotice('')
     try {
-      setAiFeatureConfig(await saveAiFeatureBindings(bindings))
+      const next = await saveAiFeatureBindings(bindings)
+      setAiFeatureConfig(next)
+      setAiFeatureNoticeTone('success')
+      setAiFeatureNotice(`已保存 ${bindings.filter((binding) => binding.profileId).length} 项功能绑定，并完成验证。`)
     } catch (caught) {
       setAiFeatureError(caught instanceof Error ? caught.message : 'AI 功能绑定保存失败。')
     } finally {
@@ -3282,10 +3289,54 @@ function DeployCenter({
   const saveAiProvider = useCallback(async (draft: AiUserProviderDraft) => {
     setAiProviderSaving(true)
     setAiFeatureError('')
+    setAiFeatureNotice('')
     try {
-      setAiFeatureConfig(await saveAiUserProvider(draft))
+      const next = await saveAiUserProvider(draft)
+      setAiFeatureConfig(next)
+      const savedProfile = next.profiles.find((profile) => (
+        draft.id ? profile.id === draft.id : profile.source === 'user' && profile.label === draft.label && profile.model === draft.model
+      ))
+      if (savedProfile) {
+        const validation = await fetchAiHealth(savedProfile.id)
+        setAiHealth((current) => mergeAiHealthResults(current, validation))
+        const validatedProfile = validation.profiles.find((profile) => profile.id === savedProfile.id)
+        if (validatedProfile?.status === 'pass') {
+          setAiFeatureNoticeTone('success')
+          setAiFeatureNotice(`已保存 ${savedProfile.label}，并完成验证。`)
+        } else {
+          setAiFeatureNoticeTone('warning')
+          setAiFeatureNotice(`配置已保存，但验证失败。当前不会自动用于 AI 功能，除非你手动绑定。`)
+        }
+      } else {
+        setAiFeatureNoticeTone('success')
+        setAiFeatureNotice(`已保存 ${draft.label}。`)
+      }
     } catch (caught) {
       setAiFeatureError(caught instanceof Error ? caught.message : 'AI API 配置保存失败。')
+      throw caught
+    } finally {
+      setAiProviderSaving(false)
+    }
+  }, [])
+
+  const revalidateAiProvider = useCallback(async (profileId: string) => {
+    setAiProviderSaving(true)
+    setAiFeatureError('')
+    setAiFeatureNotice('')
+    try {
+      const result = await fetchAiHealth(profileId)
+      setAiHealth((current) => mergeAiHealthResults(current, result))
+      const profile = result.profiles[0]
+      if (profile?.status === 'pass') {
+        setAiFeatureNoticeTone('success')
+        setAiFeatureNotice(`已重新验证 ${profile.label}，当前接口可用。`)
+      } else {
+        setAiFeatureNoticeTone('warning')
+        setAiFeatureNotice(`已重新验证 ${profile?.label ?? '该平台'}，但当前仍不可用。`)
+      }
+    } catch (caught) {
+      setAiFeatureError(caught instanceof Error ? caught.message : '平台重新验证失败。')
+      throw caught
     } finally {
       setAiProviderSaving(false)
     }
@@ -3294,10 +3345,14 @@ function DeployCenter({
   const removeAiProvider = useCallback(async (profileId: string) => {
     setAiProviderSaving(true)
     setAiFeatureError('')
+    setAiFeatureNotice('')
     try {
       setAiFeatureConfig(await deleteAiUserProvider(profileId))
+      setAiFeatureNoticeTone('success')
+      setAiFeatureNotice('已删除该 API 平台配置。')
     } catch (caught) {
       setAiFeatureError(caught instanceof Error ? caught.message : 'AI API 配置删除失败。')
+      throw caught
     } finally {
       setAiProviderSaving(false)
     }
@@ -3402,6 +3457,8 @@ function DeployCenter({
           health={aiHealth}
           healthLoading={aiHealthLoading}
           healthError={aiHealthError}
+          featureNotice={aiFeatureNotice}
+          featureNoticeTone={aiFeatureNoticeTone}
           requestBreakdown={aiRequestBreakdown}
           featureConfig={aiFeatureConfig}
           featureLoading={aiFeatureLoading}
@@ -3411,8 +3468,9 @@ function DeployCenter({
           onRunHealth={() => void runAiHealth()}
           onReloadConfig={() => void loadAiFeatureConfig()}
           onSaveBindings={(bindings) => void saveAiBindings(bindings)}
-          onSaveProvider={(draft) => void saveAiProvider(draft)}
-          onDeleteProvider={(profileId) => void removeAiProvider(profileId)}
+          onSaveProvider={saveAiProvider}
+          onRevalidateProvider={revalidateAiProvider}
+          onDeleteProvider={removeAiProvider}
         />
 
         <article className="deploy-panel wide">
@@ -3446,6 +3504,8 @@ function AiConfigCenter({
   health,
   healthLoading,
   healthError,
+  featureNotice,
+  featureNoticeTone,
   requestBreakdown,
   featureConfig,
   featureLoading,
@@ -3456,12 +3516,15 @@ function AiConfigCenter({
   onReloadConfig,
   onSaveBindings,
   onSaveProvider,
+  onRevalidateProvider,
   onDeleteProvider,
 }: {
   profiles: AiProfile[]
   health: AiHealthResult | null
   healthLoading: boolean
   healthError: string
+  featureNotice: string
+  featureNoticeTone: 'success' | 'warning'
   requestBreakdown: AiRequestBreakdown
   featureConfig: AiFeatureConfigPayload | null
   featureLoading: boolean
@@ -3471,12 +3534,11 @@ function AiConfigCenter({
   onRunHealth: () => void
   onReloadConfig: () => void
   onSaveBindings: (bindings: AiFeatureBinding[]) => void
-  onSaveProvider: (draft: AiUserProviderDraft) => void
-  onDeleteProvider: (profileId: string) => void
+  onSaveProvider: (draft: AiUserProviderDraft) => Promise<void>
+  onRevalidateProvider: (profileId: string) => Promise<void>
+  onDeleteProvider: (profileId: string) => Promise<void>
 }) {
   const healthById = new Map(health?.profiles.map((profile) => [profile.id, profile]))
-  const passCount = health?.profiles.filter((profile) => profile.status === 'pass').length ?? 0
-  const failCount = health?.profiles.filter((profile) => profile.status === 'fail').length ?? 0
   const activeProfiles = featureConfig?.profiles.length ? featureConfig.profiles : profiles
   const providerTemplates = featureConfig?.providerTemplates ?? []
   const [bindingDraft, setBindingDraft] = useState<Record<AiFeatureId, string | null>>({} as Record<AiFeatureId, string | null>)
@@ -3486,7 +3548,17 @@ function AiConfigCenter({
   const [modelDiscovery, setModelDiscovery] = useState<AiModelDiscoveryResult | null>(null)
   const [modelLoading, setModelLoading] = useState(false)
   const [modelError, setModelError] = useState('')
+  const [providerActionError, setProviderActionError] = useState('')
+  const selectedTemplate = providerTemplates.find((template) => template.id === selectedTemplateId)
+  const userProfiles = activeProfiles.filter((profile) => profile.source === 'user')
+  const profileStats = new Map(featureConfig?.stats.byProfile.map((item) => [item.profileId, item]) ?? [])
   const featureStats = new Map(featureConfig?.stats.byFeature.map((item) => [item.featureId, item]) ?? [])
+  const boundFeatureCount = featureConfig?.bindings.filter((binding) => binding.profileId).length ?? 0
+  const userPassCount = userProfiles.filter((profile) => healthById.get(profile.id)?.status === 'pass').length
+  const userFailCount = userProfiles.filter((profile) => {
+    const healthProfile = healthById.get(profile.id)
+    return healthProfile?.status === 'fail' || Boolean(profile.configurationError)
+  }).length
   const discoveredModels = modelDiscovery?.models.length
     ? modelDiscovery.models
     : providerTemplates.find((template) => template.id === selectedTemplateId || template.provider === providerDraft.provider)?.models ?? []
@@ -3506,7 +3578,7 @@ function AiConfigCenter({
 
   const selectedBindings = featureConfig?.features.map((feature) => ({
     featureId: feature.id,
-    profileId: bindingDraft[feature.id] ?? activeProfiles[0]?.id ?? null,
+    profileId: bindingDraft[feature.id] ?? null,
     updatedAt: featureConfig.bindings.find((binding) => binding.featureId === feature.id)?.updatedAt ?? null,
   })) ?? []
 
@@ -3525,6 +3597,7 @@ function AiConfigCenter({
     const template = providerTemplates.find((item) => item.id === templateId)
     setSelectedTemplateId(templateId)
     setModelError('')
+    setProviderActionError('')
     if (!template) return
     const model = template.defaultModel || template.models[0]?.id || ''
     setProviderDraft((draft) => ({
@@ -3544,7 +3617,11 @@ function AiConfigCenter({
       baseUrlHost: template.baseUrl ? safeUiHost(template.baseUrl) : '待填写',
       models: template.models,
       cached: true,
+      source: 'template',
+      validated: false,
       error: null,
+      errorCode: null,
+      suggestion: '当前显示的是平台模板模型，尚未验证可用。',
     })
   }
 
@@ -3562,7 +3639,7 @@ function AiConfigCenter({
         setProviderDraft((draft) => ({ ...draft, model: result.models[0].id }))
       }
       if (result.error) {
-        setModelError(`自动拉取失败，已显示模板/缓存模型：${result.error}`)
+        setModelError(result.suggestion ?? result.error)
       }
     } catch (caught) {
       setModelError(caught instanceof Error ? caught.message : '模型列表拉取失败，可以先手动填写模型名。')
@@ -3586,14 +3663,20 @@ function AiConfigCenter({
     setSelectedTemplateId(providerTemplates.find((template) => template.provider === profile.provider)?.id ?? '')
     setModelDiscovery(null)
     setModelError('')
+    setProviderActionError('')
   }
 
-  const submitProvider = (event: FormEvent<HTMLFormElement>) => {
+  const submitProvider = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    onSaveProvider(providerDraft)
-    setProviderDraft(emptyProviderDraft())
-    setModelDiscovery(null)
-    setSelectedTemplateId('')
+    setProviderActionError('')
+    try {
+      await onSaveProvider(providerDraft)
+      setProviderDraft(emptyProviderDraft())
+      setModelDiscovery(null)
+      setSelectedTemplateId('')
+    } catch (caught) {
+      setProviderActionError(caught instanceof Error ? caught.message : '平台保存失败。')
+    }
   }
 
   return (
@@ -3611,6 +3694,8 @@ function AiConfigCenter({
 
       {healthError ? <InlineNotice tone="danger" title="AI 健康检查失败" body={healthError} /> : null}
       {featureError ? <InlineNotice tone="danger" title="AI 功能配置失败" body={featureError} /> : null}
+      {providerActionError ? <InlineNotice tone="danger" title="平台操作失败" body={providerActionError} /> : null}
+      {featureNotice ? <InlineNotice tone={featureNoticeTone} title="配置反馈" body={featureNotice} /> : null}
 
       <InlineNotice
         tone="success"
@@ -3623,17 +3708,17 @@ function AiConfigCenter({
       />
 
       <div className="ai-config-summary">
-        <Metric label="模型配置" value={activeProfiles.length.toString()} icon={BrainCircuit} />
-        <Metric label="健康通过" value={health ? passCount.toString() : '未测'} icon={Check} />
-        <Metric label="健康失败" value={health ? failCount.toString() : '未测'} icon={X} />
-        <Metric label="AI 失败" value={requestBreakdown.failed.toString()} icon={ShieldCheck} />
+        <Metric label="已保存平台" value={userProfiles.length.toString()} icon={BrainCircuit} />
+        <Metric label="可用平台" value={health ? userPassCount.toString() : '未测'} icon={Check} />
+        <Metric label="异常平台" value={health ? userFailCount.toString() : '未测'} icon={X} />
+        <Metric label="已绑定功能" value={boundFeatureCount.toString()} icon={ShieldCheck} />
       </div>
 
       <section className="ai-provider-panel">
         <div className="ai-section-title">
           <div>
-            <strong>我的 API 平台</strong>
-            <p>先选平台模板自动带出 Base URL 和推荐模型；API Key 只提交给后端一次，加密保存，前端之后不会回显。</p>
+            <strong>选择平台</strong>
+            <p>先选平台模板，再填写 Key、拉取模型。模板模型只作参考，不代表当前 API 已验证可用。</p>
           </div>
         </div>
         <div className="ai-provider-template-grid" aria-label="AI 平台模板">
@@ -3644,11 +3729,43 @@ function AiConfigCenter({
               className={selectedTemplateId === template.id ? 'ai-provider-template active' : 'ai-provider-template'}
               onClick={() => applyProviderTemplate(template.id)}
             >
-              <strong>{template.label}</strong>
+              <div className="ai-provider-template-head">
+                <img src={template.icon} alt="" aria-hidden="true" />
+                <strong>{template.label}</strong>
+              </div>
               <span>{template.baseUrl || 'Base URL 需手动填写'}</span>
               <small>{template.notes}</small>
             </button>
           ))}
+        </div>
+        {selectedTemplate ? (
+          <div className="ai-template-detail">
+            <div className="ai-template-detail-head">
+              <img src={selectedTemplate.icon} alt="" aria-hidden="true" />
+              <div>
+                <strong>{selectedTemplate.label}</strong>
+                <span>{selectedTemplate.baseUrl || 'Base URL 需手动填写'}</span>
+              </div>
+            </div>
+            <p>{selectedTemplate.notes}</p>
+            <div className="ai-template-detail-meta">
+              <span>推荐模型：{selectedTemplate.defaultModel || '按平台控制台填写'}</span>
+              <span>Key 提示：{selectedTemplate.keyHint}</span>
+              <span>视觉支持：{selectedTemplate.models.some((item) => item.capabilities.includes('vision')) ? '部分模型支持' : '默认不支持'}</span>
+              <span>HTML 生成：{selectedTemplate.models.some((item) => item.capabilities.includes('html')) ? '推荐' : '需自行确认'}</span>
+            </div>
+            {selectedTemplate.docsUrl ? (
+              <a className="ghost-button compact inline-link-button" href={selectedTemplate.docsUrl} target="_blank" rel="noreferrer">
+                查看平台文档
+              </a>
+            ) : null}
+          </div>
+        ) : null}
+        <div className="ai-section-title">
+          <div>
+            <strong>添加 / 编辑 API</strong>
+            <p>保存只表示配置已写入；验证通过后，平台状态才会变成可用。</p>
+          </div>
         </div>
         <form className="ai-provider-form" onSubmit={submitProvider}>
           <label>
@@ -3734,7 +3851,10 @@ function AiConfigCenter({
           ) : null}
           {modelDiscovery ? (
             <p className="ai-model-discovery-note">
-              模型来源：{modelDiscovery.cached ? '缓存/模板' : 'Provider 实时返回'} · Host：{modelDiscovery.baseUrlHost} · {formatDateTime(modelDiscovery.generatedAt)}
+              模型来源：{modelDiscovery.source === 'provider' ? '实时拉取' : modelDiscovery.source === 'cache' ? '缓存模型' : '平台模板'} ·
+              {' '}Host：{modelDiscovery.baseUrlHost} ·
+              {' '}{modelDiscovery.validated ? '当前 Key 已通过模型列表验证' : '当前列表未代表 API 已验证可用'} ·
+              {' '}{formatDateTime(modelDiscovery.generatedAt)}
             </p>
           ) : null}
           {modelError ? <p className="ai-profile-error">{modelError}</p> : null}
@@ -3814,14 +3934,18 @@ function AiConfigCenter({
                   <div className="ai-feature-meta">
                     <span>函数：{feature.functionName}</span>
                     <span>能力：{capabilityLabel(feature.requiredCapability)}</span>
+                    <span>当前平台：{selectedProfile?.label ?? '系统默认'}</span>
                     <span>当前模型：{selectedProfile?.model ?? '未绑定'}</span>
                     <span>Host：{selectedProfile?.baseUrlHost ?? '未公开'}</span>
                     <span>验证：{validationLabel(selectedBinding)}</span>
-                    <span>实用模型：{selectedBinding?.validatedModel ?? selectedProfile?.model ?? '未验证'}</span>
+                    <span>实际模型：{selectedBinding?.validatedModel ?? selectedProfile?.model ?? '未验证'}</span>
                     <span>最近调用：{formatDateTime(stats?.lastCalledAt ?? null)}</span>
                     <span>成功/失败：{stats ? `${stats.ok}/${stats.error}` : '0/0'}</span>
                   </div>
                   {mismatch ? <p className="ai-profile-error">{mismatch}</p> : null}
+                  {selectedBinding?.validatedModel && selectedProfile?.model && selectedBinding.validatedModel !== selectedProfile.model ? (
+                    <p className="ai-profile-error">注意：Provider 返回的实际模型与配置模型不一致，请检查平台路由或模型别名。</p>
+                  ) : null}
                   {selectedBinding?.validationError ? <p className="ai-profile-error">{selectedBinding.validationError}</p> : null}
                 </section>
               )
@@ -3830,57 +3954,119 @@ function AiConfigCenter({
         )}
       </section>
 
-      <div className="ai-profile-grid">
-        {activeProfiles.length === 0 ? (
-          <div className="empty-state compact">
-            <Sparkles size={22} />
-            <strong>没有读取到 AI 模型</strong>
-            <p>请部署 ai-profiles 并在 Supabase Edge Function Secrets 中配置模型。</p>
+      <section className="ai-stats-panel">
+        <div className="ai-section-title">
+          <div>
+            <strong>我的 API 平台</strong>
+            <p>查看已保存的平台、最近验证结果和最近调用情况。</p>
           </div>
-        ) : (
-          activeProfiles.map((profile) => {
-            const healthProfile = healthById.get(profile.id)
-            const status = healthProfile?.status ?? (profile.configured === false ? 'fail' : 'idle')
-            return (
-              <section className={`ai-profile-card ${status}`} key={profile.id}>
-                <div className="ai-profile-head">
-                  <div>
-                    <strong>{profile.label}</strong>
-                    <span>{profile.provider}</span>
+        </div>
+        <div className="ai-profile-grid">
+          {userProfiles.length === 0 ? (
+            <div className="empty-state compact">
+              <Sparkles size={22} />
+              <strong>还没有保存任何 API 平台</strong>
+              <p>先从上面的平台模板开始，保存后这里会展示状态卡片。</p>
+            </div>
+          ) : (
+            userProfiles.map((profile) => {
+              const healthProfile = healthById.get(profile.id)
+              const template = providerTemplates.find((item) => item.provider === profile.provider)
+              const profileStat = profileStats.get(profile.id)
+              const status = healthProfile?.status ?? (profile.configured === false || profile.configurationError ? 'fail' : 'idle')
+              return (
+                <section className={`ai-profile-card ${status}`} key={profile.id}>
+                  <div className="ai-profile-head">
+                    <div className="ai-profile-title">
+                      {template?.icon ? <img src={template.icon} alt="" aria-hidden="true" /> : <span className="ai-provider-fallback-icon">{profile.label.slice(0, 1)}</span>}
+                      <div>
+                        <strong>{profile.label}</strong>
+                        <span>{template?.label ?? profile.provider}</span>
+                      </div>
+                    </div>
+                    <span className={`status-pill ${status}`}>
+                      {status === 'pass' ? '可用' : status === 'fail' ? '异常' : '未验证'}
+                    </span>
                   </div>
-                  <span className={`status-pill ${status}`}>
-                    {status === 'pass' ? '可用' : status === 'fail' ? '异常' : '未测试'}
-                  </span>
-                </div>
-                <div className="ai-profile-meta">
-                  <span>模型：{profile.model}</span>
-                  <span>Host：{healthProfile?.baseUrlHost ?? profile.baseUrlHost ?? '未公开'}</span>
-                  <span>来源：{profile.source === 'user' ? '我的 API' : '系统预设'}</span>
-                  <span>密钥：{profile.source === 'user' ? profile.keyHint ?? '已加密保存' : (healthProfile?.configured ?? profile.configured ?? true) ? '已配置或待确认' : '未配置'}</span>
-                  {profile.supportsVision ? <span>能力：视觉输入</span> : null}
-                  {profile.supportsHtmlGeneration === false ? <span>限制：不用于 HTML 生成</span> : null}
-                  {healthProfile?.latencyMs !== undefined && healthProfile.latencyMs !== null ? (
-                    <span>延迟：{formatLatency(healthProfile.latencyMs)}</span>
-                  ) : null}
-                  {healthProfile ? <span>检查：{formatDateTime(healthProfile.checkedAt)}</span> : null}
-                </div>
-                {profile.configurationError ? <p className="ai-profile-error">此 API 密钥需要重新保存：{profile.configurationError}</p> : null}
-                {healthProfile?.error ? <p className="ai-profile-error">{healthProfile.error}</p> : null}
-                {profile.source === 'user' ? (
+                  <div className="ai-profile-meta">
+                    <span>模型：{profile.model}</span>
+                    <span>Host：{healthProfile?.baseUrlHost ?? profile.baseUrlHost ?? '未公开'}</span>
+                    <span>Key：{profile.keyHint ?? '已加密保存'}</span>
+                    <span>能力：{profileCapabilityText(profile)}</span>
+                    <span>最近验证：{formatDateTime(healthProfile?.checkedAt ?? null)}</span>
+                    <span>最近调用：{formatDateTime(profileStat?.lastCalledAt ?? null)}</span>
+                    <span>成功/失败：{profileStat ? `${profileStat.ok}/${profileStat.error}` : '0/0'}</span>
+                    {healthProfile?.latencyMs !== undefined && healthProfile.latencyMs !== null ? <span>延迟：{formatLatency(healthProfile.latencyMs)}</span> : null}
+                  </div>
+                  {profile.configurationError ? <p className="ai-profile-error">此 API 密钥需要重新保存：{profile.configurationError}</p> : null}
+                  {healthProfile?.error ? <p className="ai-profile-error">{healthProfile.error}</p> : null}
                   <div className="ai-profile-actions">
                     <button className="ghost-button" type="button" onClick={() => editProvider(profile)} disabled={providerSaving}>
                       编辑
                     </button>
-                    <button className="ghost-button danger" type="button" onClick={() => onDeleteProvider(profile.id)} disabled={providerSaving}>
+                    <button className="ghost-button" type="button" onClick={() => void onRevalidateProvider(profile.id)} disabled={providerSaving}>
+                      重新验证
+                    </button>
+                    <button className="ghost-button danger" type="button" onClick={() => void onDeleteProvider(profile.id)} disabled={providerSaving}>
                       删除
                     </button>
                   </div>
-                ) : null}
-              </section>
-            )
-          })
-        )}
-      </div>
+                </section>
+              )
+            })
+          )}
+        </div>
+      </section>
+
+      <section className="ai-stats-panel">
+        <div className="ai-section-title">
+          <div>
+            <strong>系统预设模型</strong>
+            <p>这些是服务端可用的默认后备模型，用于未绑定或系统默认场景。</p>
+          </div>
+        </div>
+        <div className="ai-profile-grid">
+          {activeProfiles.filter((profile) => profile.source !== 'user').length === 0 ? (
+            <div className="empty-state compact">
+              <Sparkles size={22} />
+              <strong>没有读取到系统预设模型</strong>
+              <p>请部署 ai-profiles 并在 Supabase Edge Function Secrets 中配置模型。</p>
+            </div>
+          ) : (
+            activeProfiles.filter((profile) => profile.source !== 'user').map((profile) => {
+              const healthProfile = healthById.get(profile.id)
+              const template = providerTemplates.find((item) => item.provider === profile.provider)
+              const status = healthProfile?.status ?? (profile.configured === false || profile.configurationError ? 'fail' : 'idle')
+              return (
+                <section className={`ai-profile-card ${status}`} key={profile.id}>
+                  <div className="ai-profile-head">
+                    <div className="ai-profile-title">
+                      {template?.icon ? <img src={template.icon} alt="" aria-hidden="true" /> : <span className="ai-provider-fallback-icon">{profile.label.slice(0, 1)}</span>}
+                      <div>
+                        <strong>{profile.label}</strong>
+                        <span>{template?.label ?? profile.provider}</span>
+                      </div>
+                    </div>
+                    <span className={`status-pill ${status}`}>
+                      {status === 'pass' ? '可用' : status === 'fail' ? '异常' : '未验证'}
+                    </span>
+                  </div>
+                  <div className="ai-profile-meta">
+                    <span>模型：{profile.model}</span>
+                    <span>Host：{healthProfile?.baseUrlHost ?? profile.baseUrlHost ?? '未公开'}</span>
+                    <span>来源：系统预设</span>
+                    <span>能力：{profileCapabilityText(profile)}</span>
+                    {healthProfile?.latencyMs !== undefined && healthProfile.latencyMs !== null ? <span>延迟：{formatLatency(healthProfile.latencyMs)}</span> : null}
+                    {healthProfile ? <span>检查：{formatDateTime(healthProfile.checkedAt)}</span> : null}
+                  </div>
+                  {profile.configurationError ? <p className="ai-profile-error">配置异常：{profile.configurationError}</p> : null}
+                  {healthProfile?.error ? <p className="ai-profile-error">{healthProfile.error}</p> : null}
+                </section>
+              )
+            })
+          )}
+        </div>
+      </section>
 
       {featureConfig ? (
         <div className="ai-stats-panel">
@@ -5876,6 +6062,15 @@ function modelCapabilitySummary(model: AiModelOption) {
   return labels.length ? labels.join(' / ') : '能力未知'
 }
 
+function profileCapabilityText(profile: AiProfile) {
+  const capabilities = inferUiModelCapabilities(profile.model)
+  const labels = ['文本']
+  if (profile.supportsVision || capabilities.includes('vision')) labels.push('视觉')
+  if ((profile.supportsHtmlGeneration !== false) && capabilities.includes('html')) labels.push('HTML 生成')
+  if (capabilities.includes('long_context')) labels.push('长上下文')
+  return Array.from(new Set(labels)).join(' / ')
+}
+
 function validationLabel(binding: AiFeatureBinding | undefined) {
   if (!binding?.validationStatus || binding.validationStatus === 'unknown') return '未验证'
   const prefix = binding.validationStatus === 'pass' ? '已验证可用' : '验证失败'
@@ -5907,6 +6102,18 @@ function safeUiHost(value: string) {
     return new URL(value).host
   } catch {
     return 'invalid-url'
+  }
+}
+
+function mergeAiHealthResults(current: AiHealthResult | null, incoming: AiHealthResult) {
+  if (!current) return incoming
+  const profiles = new Map(current.profiles.map((profile) => [profile.id, profile]))
+  for (const profile of incoming.profiles) {
+    profiles.set(profile.id, profile)
+  }
+  return {
+    generatedAt: incoming.generatedAt,
+    profiles: Array.from(profiles.values()),
   }
 }
 

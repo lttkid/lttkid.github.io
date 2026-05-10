@@ -62,6 +62,7 @@ const aiProviderTemplates: AiProviderTemplate[] = [
     id: 'siliconflow',
     label: 'SiliconFlow',
     provider: 'siliconflow',
+    icon: '/provider-icons/siliconflow.svg',
     baseUrl: 'https://api.siliconflow.cn/v1',
     apiType: 'openai-compatible',
     defaultModel: 'Qwen/Qwen2.5-7B-Instruct',
@@ -78,6 +79,7 @@ const aiProviderTemplates: AiProviderTemplate[] = [
     id: 'deepseek',
     label: 'DeepSeek',
     provider: 'deepseek',
+    icon: '/provider-icons/deepseek.svg',
     baseUrl: 'https://api.deepseek.com',
     apiType: 'openai-compatible',
     defaultModel: 'deepseek-chat',
@@ -93,6 +95,7 @@ const aiProviderTemplates: AiProviderTemplate[] = [
     id: 'dashscope',
     label: '通义千问 / DashScope',
     provider: 'dashscope',
+    icon: '/provider-icons/dashscope.svg',
     baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
     apiType: 'openai-compatible',
     defaultModel: 'qwen-plus',
@@ -109,6 +112,7 @@ const aiProviderTemplates: AiProviderTemplate[] = [
     id: 'mimo',
     label: '小米 MiMo',
     provider: 'mimo',
+    icon: '/provider-icons/mimo.svg',
     baseUrl: '',
     apiType: 'openai-compatible',
     defaultModel: 'MiMo-7B-RL',
@@ -118,9 +122,74 @@ const aiProviderTemplates: AiProviderTemplate[] = [
     models: [aiModelOption('MiMo-7B-RL', ['text'])],
   },
   {
+    id: 'openrouter',
+    label: 'OpenRouter',
+    provider: 'openrouter',
+    icon: '/provider-icons/openrouter.svg',
+    baseUrl: 'https://openrouter.ai/api/v1',
+    apiType: 'openai-compatible',
+    defaultModel: 'openai/gpt-4o-mini',
+    docsUrl: 'https://openrouter.ai/docs',
+    keyHint: 'OpenRouter API Key',
+    notes: '聚合多家模型，模型名通常带 provider 前缀。',
+    models: [
+      aiModelOption('openai/gpt-4o-mini', ['text', 'vision', 'html']),
+      aiModelOption('anthropic/claude-3.5-sonnet', ['text', 'vision', 'long_context', 'html']),
+      aiModelOption('google/gemini-flash-1.5', ['text', 'vision', 'long_context', 'html']),
+    ],
+  },
+  {
+    id: 'zhipu',
+    label: '智谱 GLM',
+    provider: 'zhipu',
+    icon: '/provider-icons/zhipu.svg',
+    baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+    apiType: 'openai-compatible',
+    defaultModel: 'glm-4-flash',
+    docsUrl: 'https://docs.bigmodel.cn/',
+    keyHint: '智谱 API Key',
+    notes: '适合文本和多模态任务；视觉能力请确认 GLM 模型支持图片输入。',
+    models: [
+      aiModelOption('glm-4-flash', ['text', 'html']),
+      aiModelOption('glm-4-plus', ['text', 'long_context', 'html']),
+      aiModelOption('glm-4v', ['text', 'vision', 'html']),
+    ],
+  },
+  {
+    id: 'volcengine',
+    label: '火山方舟',
+    provider: 'volcengine',
+    icon: '/provider-icons/volcengine.svg',
+    baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
+    apiType: 'openai-compatible',
+    defaultModel: '',
+    docsUrl: 'https://www.volcengine.com/docs/82379',
+    keyHint: '火山方舟 API Key',
+    notes: '模型 ID 往往来自控制台 Endpoint，请优先拉模型或手动粘贴。',
+    models: [aiModelOption('请从控制台选择 endpoint/model', ['text'])],
+  },
+  {
+    id: 'moonshot',
+    label: '月之暗面 Kimi',
+    provider: 'moonshot',
+    icon: '/provider-icons/moonshot.svg',
+    baseUrl: 'https://api.moonshot.cn/v1',
+    apiType: 'openai-compatible',
+    defaultModel: 'moonshot-v1-8k',
+    docsUrl: 'https://platform.moonshot.cn/docs',
+    keyHint: 'Moonshot API Key',
+    notes: '适合文本阅读、摘要和长上下文；视觉任务请绑定其他模型。',
+    models: [
+      aiModelOption('moonshot-v1-8k', ['text', 'html']),
+      aiModelOption('moonshot-v1-32k', ['text', 'long_context', 'html']),
+      aiModelOption('moonshot-v1-128k', ['text', 'long_context', 'html']),
+    ],
+  },
+  {
     id: 'custom-openai',
     label: 'OpenAI-compatible 自定义',
     provider: 'openai-compatible',
+    icon: '/provider-icons/openai-compatible.svg',
     baseUrl: 'https://api.openai.com/v1',
     apiType: 'openai-compatible',
     defaultModel: 'gpt-4o-mini',
@@ -820,12 +889,12 @@ export async function fetchAiProfiles(): Promise<AiProfile[]> {
   return data?.profiles?.filter((profile) => profile.enabled) ?? []
 }
 
-export async function fetchAiHealth(): Promise<AiHealthResult> {
+export async function fetchAiHealth(profileId?: string): Promise<AiHealthResult> {
   if (isDemoMode) {
     const generatedAt = new Date().toISOString()
     return {
       generatedAt,
-      profiles: demoAllAiProfiles().map((profile) => ({
+      profiles: demoAllAiProfiles().filter((profile) => (profileId ? profile.id === profileId : true)).map((profile) => ({
         ...profile,
         configured: true,
         baseUrlHost: profile.baseUrlHost ?? 'demo.local',
@@ -838,7 +907,9 @@ export async function fetchAiHealth(): Promise<AiHealthResult> {
   }
 
   const client = requireSupabase()
-  const { data, error } = await client.functions.invoke<AiHealthResult>('ai-health')
+  const { data, error } = await client.functions.invoke<AiHealthResult>('ai-health', {
+    body: profileId ? { profileId } : undefined,
+  })
   if (error) throw await translateFunctionError(error, 'AI_HEALTH_FAILED')
   if (!data) throw new Error('AI 健康检查没有返回内容。')
   return data
@@ -865,6 +936,11 @@ export async function fetchAiFeatureConfig(): Promise<AiFeatureConfigPayload> {
           { model: 'Qwen/Qwen2.5-7B-Instruct', total: 3, ok: 3, error: 0, lastCalledAt: new Date().toISOString() },
           { model: 'deepseek-chat', total: 1, ok: 1, error: 0, lastCalledAt: new Date(Date.now() - 18 * 60 * 1000).toISOString() },
           { model: 'vision-demo-model', total: 1, ok: 1, error: 0, lastCalledAt: new Date(Date.now() - 12 * 60 * 1000).toISOString() },
+        ],
+        byProfile: [
+          { profileId: 'siliconflow-qwen', total: 3, ok: 3, error: 0, lastCalledAt: new Date().toISOString() },
+          { profileId: 'deepseek-chat', total: 1, ok: 1, error: 0, lastCalledAt: new Date(Date.now() - 18 * 60 * 1000).toISOString() },
+          { profileId: 'vision-demo', total: 1, ok: 1, error: 0, lastCalledAt: new Date(Date.now() - 12 * 60 * 1000).toISOString() },
         ],
         byStatus: [
           { status: 'ok', count: 5 },
@@ -930,7 +1006,11 @@ export async function fetchAiModelOptions(input: {
       baseUrlHost: safeHost(input.providerDraft?.baseUrl ?? template.baseUrl),
       models: template.models,
       cached: !input.force,
+      source: input.force ? 'provider' : 'template',
+      validated: Boolean(input.force),
       error: null,
+      errorCode: null,
+      suggestion: input.force ? null : '当前显示的是平台模板模型，尚未验证可用。',
     }
   }
 
@@ -1059,7 +1139,7 @@ function aiClientSuggestion(code: string) {
   const suggestions: Record<string, string> = {
     FUNCTION_NOT_DEPLOYED: '请确认 Supabase Edge Function 已部署，尤其是 ai-feature-config 和 ai-generate-html。',
     MODEL_TIMEOUT: '模型响应超时。可以换更快模型、缩短需求，或稍后重试。',
-    PROVIDER_AUTH_FAILED: '请检查 Provider API Key、额度和 Base URL，并重新保存配置。',
+    PROVIDER_AUTH_FAILED: 'API Key 验证失败。请检查当前平台是否正确、API Key 是否来自该平台、Base URL 是否匹配、Key 是否过期，或该平台是否不支持兼容的 /models 接口。',
     MODEL_OUTPUT_INVALID: '模型输出不是合规单文件 HTML。建议换更强的 HTML 模型或简化生成需求。',
     MODEL_DISCOVERY_FAILED: '无法自动拉取模型列表，可先使用模板推荐模型或手动填写。',
     AI_BINDING_SAVE_FAILED: '功能绑定没有保存成功，请刷新配置中心后重试。',

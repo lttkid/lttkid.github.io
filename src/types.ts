@@ -181,6 +181,7 @@ export interface AiProviderTemplate {
   id: string
   label: string
   provider: string
+  icon: string
   baseUrl: string
   apiType: 'openai-compatible'
   defaultModel: string
@@ -256,6 +257,7 @@ export interface AiFeatureConfigPayload {
     total: number
     byFeature: Array<AiStatBucket & { featureId: string }>
     byModel: Array<AiStatBucket & { model: string }>
+    byProfile: Array<AiStatBucket & { profileId: string }>
     byStatus: Array<{ status: string; count: number }>
   }
   security: {
@@ -284,7 +286,11 @@ export interface AiModelDiscoveryResult {
   baseUrlHost: string
   models: AiModelOption[]
   cached: boolean
+  source: 'provider' | 'cache' | 'template'
+  validated: boolean
   error: string | null
+  errorCode?: string | null
+  suggestion?: string | null
 }
 
 export interface AiRequestBreakdown {
