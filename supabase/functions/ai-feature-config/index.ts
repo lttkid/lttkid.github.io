@@ -5,6 +5,7 @@ import {
   errorPayload,
   encryptUserApiKey,
   getAvailableProfiles,
+  getProfiles,
   inferModelCapabilities,
   listOpenAiCompatibleModels,
   maskApiKey,
@@ -35,6 +36,20 @@ type BindingRow = {
   validated_at?: string | null
   validated_model?: string | null
   validation_error?: string | null
+}
+
+type UserProviderRow = {
+  id: string
+  label: string
+  provider: string
+  base_url: string
+  model: string
+  api_key_ciphertext: string
+  api_key_iv: string
+  api_key_hint?: string | null
+  supports_vision?: boolean | null
+  supports_html_generation?: boolean | null
+  enabled?: boolean | null
 }
 
 const features: FeatureDefinition[] = [
@@ -283,7 +298,7 @@ function normalizeProviderInput(input: UserProviderInput | undefined, options: {
 }
 
 async function buildPayload(supabase: Awaited<ReturnType<typeof requireUser>>['supabase'], userId: string) {
-  const profiles = await Promise.all((await getAvailableProfiles(supabase, userId)).map((profile) => toPublicProfile(profile)))
+  const profiles = await Promise.all((await loadConfigProfiles(supabase, userId)).map((profile) => toPublicProfile(profile)))
   const [{ data: bindings }, { data: requestRows }] = await Promise.all([
     supabase
       .from('ai_feature_bindings')
@@ -291,7 +306,7 @@ async function buildPayload(supabase: Awaited<ReturnType<typeof requireUser>>['s
       .eq('owner_id', userId),
     supabase
       .from('ai_requests')
-      .select('request_type,feature_id,provider,model,used_model,profile_id,profile_source,status,error_code,created_at')
+      .select('request_type,feature_id,provider,model,used_model,profile_id,profile_source,status,error_code,error_message,created_at')
       .eq('owner_id', userId)
       .order('created_at', { ascending: false })
       .limit(800),
@@ -342,6 +357,18 @@ function buildStats(rows: Array<Record<string, unknown>>) {
   const byModel = new Map<string, ReturnType<typeof createStatBucket>>()
   const byProfile = new Map<string, ReturnType<typeof createStatBucket>>()
   const byStatus = new Map<string, number>()
+  const recentFailures: Array<{
+    featureId: string
+    requestType: string
+    provider: string
+    model: string
+    usedModel: string | null
+    profileId: string | null
+    profileSource: string | null
+    errorCode: string | null
+    errorMessage: string | null
+    createdAt: string
+  }> = []
 
   for (const row of rows) {
     const requestType = String(row.feature_id ?? row.request_type ?? 'unknown')
@@ -349,11 +376,47 @@ function buildStats(rows: Array<Record<string, unknown>>) {
     const profileId = String(row.profile_id ?? '').trim()
     const status = String(row.status ?? 'unknown')
     const createdAt = String(row.created_at ?? '')
+    const errorCode = typeof row.error_code === 'string' ? row.error_code : null
+    const errorMessage = typeof row.error_message === 'string' ? row.error_message : null
 
-    bumpBucket(byFeature, requestType, status, createdAt)
-    bumpBucket(byModel, model, status, createdAt)
-    if (profileId) bumpBucket(byProfile, profileId, status, createdAt)
+    bumpBucket(byFeature, requestType, {
+      status,
+      createdAt,
+      usedModel: typeof row.used_model === 'string' ? row.used_model : typeof row.model === 'string' ? row.model : null,
+      errorCode,
+      errorMessage,
+    })
+    bumpBucket(byModel, model, {
+      status,
+      createdAt,
+      usedModel: typeof row.used_model === 'string' ? row.used_model : typeof row.model === 'string' ? row.model : null,
+      errorCode,
+      errorMessage,
+    })
+    if (profileId) {
+      bumpBucket(byProfile, profileId, {
+        status,
+        createdAt,
+        usedModel: typeof row.used_model === 'string' ? row.used_model : typeof row.model === 'string' ? row.model : null,
+        errorCode,
+        errorMessage,
+      })
+    }
     byStatus.set(status, (byStatus.get(status) ?? 0) + 1)
+    if (status === 'error' && recentFailures.length < 8) {
+      recentFailures.push({
+        featureId: requestType,
+        requestType: String(row.request_type ?? requestType),
+        provider: String(row.provider ?? 'unknown'),
+        model: String(row.model ?? 'unknown'),
+        usedModel: typeof row.used_model === 'string' ? row.used_model : null,
+        profileId: profileId || null,
+        profileSource: typeof row.profile_source === 'string' ? row.profile_source : null,
+        errorCode,
+        errorMessage,
+        createdAt,
+      })
+    }
   }
 
   return {
@@ -362,6 +425,7 @@ function buildStats(rows: Array<Record<string, unknown>>) {
     byModel: Array.from(byModel, ([model, bucket]) => ({ model, ...bucket })),
     byProfile: Array.from(byProfile, ([profileId, bucket]) => ({ profileId, ...bucket })),
     byStatus: Array.from(byStatus, ([status, count]) => ({ status, count })),
+    recentFailures,
   }
 }
 
@@ -449,7 +513,7 @@ async function resolveModelDiscoveryProfile(
   body: ConfigBody,
 ): Promise<AiProfile> {
   if (body.profileId) {
-    const profiles = await getAvailableProfiles(supabase, userId)
+    const profiles = await loadConfigProfiles(supabase, userId)
     const profile = profiles.find((item) => item.id === body.profileId)
     if (profile) return profile
   }
@@ -636,14 +700,70 @@ function createStatBucket() {
     ok: 0,
     error: 0,
     lastCalledAt: null as string | null,
+    lastUsedModel: null as string | null,
+    lastErrorCode: null as string | null,
+    lastErrorMessage: null as string | null,
   }
 }
 
-function bumpBucket(map: Map<string, ReturnType<typeof createStatBucket>>, key: string, status: string, createdAt: string) {
+function bumpBucket(
+  map: Map<string, ReturnType<typeof createStatBucket>>,
+  key: string,
+  details: {
+    status: string
+    createdAt: string
+    usedModel: string | null
+    errorCode: string | null
+    errorMessage: string | null
+  },
+) {
   const bucket = map.get(key) ?? createStatBucket()
   bucket.total += 1
-  if (status === 'error') bucket.error += 1
+  if (details.status === 'error') bucket.error += 1
   else bucket.ok += 1
-  if (createdAt && (!bucket.lastCalledAt || createdAt > bucket.lastCalledAt)) bucket.lastCalledAt = createdAt
+  if (details.createdAt && (!bucket.lastCalledAt || details.createdAt > bucket.lastCalledAt)) {
+    bucket.lastCalledAt = details.createdAt
+    bucket.lastUsedModel = details.usedModel
+  }
+  if (details.status === 'error' && !bucket.lastErrorCode && !bucket.lastErrorMessage) {
+    bucket.lastErrorCode = details.errorCode
+    bucket.lastErrorMessage = details.errorMessage
+  }
   map.set(key, bucket)
+}
+
+async function loadConfigProfiles(
+  supabase: Awaited<ReturnType<typeof requireUser>>['supabase'],
+  userId: string,
+): Promise<AiProfile[]> {
+  const [{ data: userRows }, serverProfiles] = await Promise.all([
+    supabase
+      .from('ai_user_providers')
+      .select('id,label,provider,base_url,model,api_key_ciphertext,api_key_iv,api_key_hint,supports_vision,supports_html_generation,enabled')
+      .eq('owner_id', userId)
+      .order('updated_at', { ascending: false }),
+    Promise.resolve(getProfiles()),
+  ])
+
+  const userProfiles = (userRows ?? []).map((row) => mapUserProviderRow(row as unknown as UserProviderRow, userId))
+  return [...userProfiles, ...serverProfiles]
+}
+
+function mapUserProviderRow(row: UserProviderRow, userId: string): AiProfile {
+  return {
+    id: `user:${row.id}`,
+    label: String(row.label ?? '用户自定义 API'),
+    provider: String(row.provider ?? 'openai-compatible'),
+    model: String(row.model ?? ''),
+    enabled: Boolean(row.enabled ?? true),
+    source: 'user',
+    userProviderId: String(row.id),
+    baseUrl: String(row.base_url ?? ''),
+    apiKeyCiphertext: String(row.api_key_ciphertext ?? ''),
+    apiKeyIv: String(row.api_key_iv ?? ''),
+    apiKeyHint: typeof row.api_key_hint === 'string' ? row.api_key_hint : null,
+    ownerId: userId,
+    supportsVision: Boolean(row.supports_vision),
+    supportsHtmlGeneration: Boolean(row.supports_html_generation ?? true),
+  }
 }

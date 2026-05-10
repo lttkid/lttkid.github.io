@@ -647,7 +647,8 @@ async function checkViewport(browser, viewport) {
   await page.getByRole('button', { name: '部署', exact: true }).click()
   await page.getByRole('heading', { name: '系统体检' }).waitFor()
   await page.getByRole('main').getByText('Demo Mode').waitFor()
-  await page.getByRole('heading', { name: 'AI 配置中心' }).waitFor()
+  await page.getByRole('button', { name: 'API 配置', exact: true }).click()
+  await page.getByRole('heading', { name: 'API 配置中心' }).waitFor()
   await page.getByText('我的 API 平台').waitFor()
   const userApiLabel = `Smoke 自定义 API ${viewport.width} ${runId}`
   await page.getByPlaceholder('例如 SiliconFlow 个人 Key').fill(userApiLabel)

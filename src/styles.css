@@ -1390,6 +1390,36 @@ input[type="color"] {
   line-height: 1.55;
 }
 
+.panel-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: flex-start;
+  flex-wrap: wrap;
+}
+
+.ai-overview-line,
+.ai-overview-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.ai-overview-line strong,
+.ai-overview-line span,
+.ai-overview-meta span {
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0 12px;
+  color: #334155;
+  background: rgba(255, 255, 255, 0.72);
+  font-size: 13px;
+}
+
 .ai-provider-panel,
 .ai-feature-panel,
 .ai-stats-panel {
@@ -1645,6 +1675,11 @@ input[type="color"] {
   border-color: rgba(225, 29, 72, 0.28);
 }
 
+.ai-profile-card.disabled {
+  border-color: rgba(148, 163, 184, 0.24);
+  background: rgba(241, 245, 249, 0.76);
+}
+
 .ai-profile-head {
   display: flex;
   gap: 10px;
@@ -1714,6 +1749,11 @@ input[type="color"] {
   background: #ffe4e6;
 }
 
+.status-pill.disabled {
+  color: #475569;
+  background: rgba(148, 163, 184, 0.16);
+}
+
 .ai-profile-meta {
   display: grid;
   gap: 6px;
@@ -1742,6 +1782,34 @@ input[type="color"] {
   border-radius: 999px;
   padding: 7px 11px;
   background: rgba(255, 255, 255, 0.7);
+}
+
+.ai-diagnostic-list {
+  display: grid;
+  gap: 10px;
+}
+
+.ai-diagnostic-card {
+  display: grid;
+  gap: 8px;
+  border: 1px solid rgba(225, 29, 72, 0.18);
+  border-radius: 14px;
+  padding: 12px 14px;
+  background: rgba(255, 241, 242, 0.5);
+}
+
+.ai-diagnostic-head {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.ai-diagnostic-card p,
+.ai-diagnostic-card span {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
 }
 
 .segmented-tabs {
@@ -4798,6 +4866,9 @@ select option {
     grid-template-columns: 1fr;
   }
 
+  .ai-overview-line,
+  .ai-overview-meta,
+  .panel-actions,
   .ai-config-actions,
   .segmented-tabs {
     flex-wrap: wrap;

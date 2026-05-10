@@ -216,6 +216,7 @@ type CompanionPosition = {
 type TabDockActionId =
   | 'library'
   | 'generator'
+  | 'apiConfig'
   | 'notes'
   | 'stats'
   | 'personas'
@@ -436,7 +437,15 @@ function buildLocatorFragment(locator: AnnotationLocator, start: number, end: nu
 function parseHash(): RouteState {
   const [view, id] = window.location.hash.replace(/^#\/?/, '').split('/')
   if (view === 'reader' && id) return { view: 'reader', documentId: id }
-  if (view === 'stats' || view === 'personas' || view === 'library' || view === 'generator' || view === 'notes' || view === 'deploy') {
+  if (
+    view === 'stats' ||
+    view === 'personas' ||
+    view === 'library' ||
+    view === 'generator' ||
+    view === 'notes' ||
+    view === 'deploy' ||
+    view === 'api-config'
+  ) {
     return { view }
   }
   return defaultRoute
@@ -462,6 +471,7 @@ function getStoredPinnedActions(): TabDockActionId[] {
     const allowed = new Set<TabDockActionId>([
       'library',
       'generator',
+      'apiConfig',
       'notes',
       'stats',
       'personas',
@@ -956,11 +966,23 @@ export default function App() {
         <NotesView documents={payload.documents} categories={payload.categories} onOpenDocument={(id) => navigate('reader', id)} />
       ) : route.view === 'personas' ? (
         <PersonasView personas={payload.personas} aiProfiles={payload.aiProfiles} onSave={handleSavePersona} />
-      ) : route.view === 'deploy' ? (
+      ) : route.view === 'api-config' ? (
         <DeployCenter
+          page="api-config"
           user={auth.user}
           aiProfiles={payload.aiProfiles}
           aiRequestBreakdown={payload.aiRequestBreakdown}
+          onOpenApiConfig={() => navigate('api-config')}
+          onOpenDeploy={() => navigate('deploy')}
+        />
+      ) : route.view === 'deploy' ? (
+        <DeployCenter
+          page="deploy"
+          user={auth.user}
+          aiProfiles={payload.aiProfiles}
+          aiRequestBreakdown={payload.aiRequestBreakdown}
+          onOpenApiConfig={() => navigate('api-config')}
+          onOpenDeploy={() => navigate('deploy')}
         />
       ) : (
         <LibraryView
@@ -1109,6 +1131,7 @@ function AppShell({
   const navItems = [
     { view: 'library' as AppView, label: '资料库', icon: Library },
     { view: 'generator' as AppView, label: 'AI 生成', icon: Sparkles },
+    { view: 'api-config' as AppView, label: 'API 配置', icon: Settings2 },
     { view: 'notes' as AppView, label: '笔记', icon: NotebookPen },
     { view: 'stats' as AppView, label: '统计', icon: BarChart3 },
     { view: 'personas' as AppView, label: '人物', icon: BrainCircuit },
@@ -1176,6 +1199,13 @@ function AppShell({
         description: '用预设 Prompt 生成可保存的 HTML',
         icon: Sparkles,
         run: () => navigateFromDock('generator'),
+      },
+      {
+        id: 'apiConfig',
+        label: 'API 配置',
+        description: '管理 API 平台、模型、绑定和调用状态',
+        icon: Settings2,
+        run: () => navigateFromDock('api-config'),
       },
       {
         id: 'notes',
@@ -3203,13 +3233,19 @@ function ChartFallback() {
 }
 
 function DeployCenter({
+  page,
   user,
   aiProfiles,
   aiRequestBreakdown,
+  onOpenApiConfig,
+  onOpenDeploy,
 }: {
+  page: 'deploy' | 'api-config'
   user: AppUser
   aiProfiles: AiProfile[]
   aiRequestBreakdown: AiRequestBreakdown
+  onOpenApiConfig: () => void
+  onOpenDeploy: () => void
 }) {
   const [result, setResult] = useState<ClientPreflightResult | null>(null)
   const [loading, setLoading] = useState(false)
@@ -3238,8 +3274,9 @@ function DeployCenter({
   }, [user])
 
   useEffect(() => {
+    if (page !== 'deploy') return
     void run()
-  }, [run])
+  }, [page, run])
 
   const runAiHealth = useCallback(async (profileId?: string) => {
     setAiHealthLoading(true)
@@ -3267,8 +3304,9 @@ function DeployCenter({
   }, [])
 
   useEffect(() => {
+    if (page !== 'api-config') return
     void loadAiFeatureConfig()
-  }, [loadAiFeatureConfig])
+  }, [loadAiFeatureConfig, page])
 
   const saveAiBindings = useCallback(async (bindings: AiFeatureBinding[]) => {
     setAiFeatureSaving(true)
@@ -3395,6 +3433,45 @@ function DeployCenter({
     },
   ]
 
+  if (page === 'api-config') {
+    return (
+      <section className="page-stack">
+        <div className="page-header">
+          <div>
+            <p className="eyebrow">API Control Plane</p>
+            <h1>API 配置中心</h1>
+            <p className="generator-summary-copy">日常管理 AI 平台、模型、密钥、功能绑定和调用状态，不再藏在部署中心里。</p>
+          </div>
+          <button className="ghost-button" type="button" onClick={onOpenDeploy}>
+            <Server size={18} />
+            打开部署中心
+          </button>
+        </div>
+
+        <AiConfigCenter
+          profiles={aiProfiles}
+          health={aiHealth}
+          healthLoading={aiHealthLoading}
+          healthError={aiHealthError}
+          featureNotice={aiFeatureNotice}
+          featureNoticeTone={aiFeatureNoticeTone}
+          requestBreakdown={aiRequestBreakdown}
+          featureConfig={aiFeatureConfig}
+          featureLoading={aiFeatureLoading}
+          featureSaving={aiFeatureSaving}
+          providerSaving={aiProviderSaving}
+          featureError={aiFeatureError}
+          onRunHealth={() => void runAiHealth()}
+          onReloadConfig={() => void loadAiFeatureConfig()}
+          onSaveBindings={(bindings) => void saveAiBindings(bindings)}
+          onSaveProvider={saveAiProvider}
+          onRevalidateProvider={revalidateAiProvider}
+          onDeleteProvider={removeAiProvider}
+        />
+      </section>
+    )
+  }
+
   return (
     <section className="page-stack">
       <div className="page-header">
@@ -3452,26 +3529,25 @@ function DeployCenter({
           </div>
         </article>
 
-        <AiConfigCenter
-          profiles={aiProfiles}
-          health={aiHealth}
-          healthLoading={aiHealthLoading}
-          healthError={aiHealthError}
-          featureNotice={aiFeatureNotice}
-          featureNoticeTone={aiFeatureNoticeTone}
-          requestBreakdown={aiRequestBreakdown}
-          featureConfig={aiFeatureConfig}
-          featureLoading={aiFeatureLoading}
-          featureSaving={aiFeatureSaving}
-          providerSaving={aiProviderSaving}
-          featureError={aiFeatureError}
-          onRunHealth={() => void runAiHealth()}
-          onReloadConfig={() => void loadAiFeatureConfig()}
-          onSaveBindings={(bindings) => void saveAiBindings(bindings)}
-          onSaveProvider={saveAiProvider}
-          onRevalidateProvider={revalidateAiProvider}
-          onDeleteProvider={removeAiProvider}
-        />
+        <article className="deploy-panel">
+          <h2>API 配置入口</h2>
+          <p className="deploy-time">
+            日常 API 平台、模型、功能绑定和故障诊断已迁移到独立页面。部署中心只保留系统体检和上线检查。
+          </p>
+          <div className="stats-ai-strip">
+            <span>平台 {aiProfiles.length}</span>
+            <span>解释 {aiRequestBreakdown.explain}</span>
+            <span>摘要 {aiRequestBreakdown.summarize}</span>
+            <span>生成 {aiRequestBreakdown.generateHtml}</span>
+            <span>失败 {aiRequestBreakdown.failed}</span>
+          </div>
+          <div className="panel-actions">
+            <button className="primary-button compact" type="button" onClick={onOpenApiConfig}>
+              <Settings2 size={18} />
+              打开 API 配置
+            </button>
+          </div>
+        </article>
 
         <article className="deploy-panel wide">
           <h2>安全边界</h2>
@@ -3539,7 +3615,8 @@ function AiConfigCenter({
   onDeleteProvider: (profileId: string) => Promise<void>
 }) {
   const healthById = new Map(health?.profiles.map((profile) => [profile.id, profile]))
-  const activeProfiles = featureConfig?.profiles.length ? featureConfig.profiles : profiles
+  const allProfiles = featureConfig?.profiles.length ? featureConfig.profiles : profiles
+  const selectableProfiles = allProfiles.filter((profile) => profile.enabled)
   const providerTemplates = featureConfig?.providerTemplates ?? []
   const [bindingDraft, setBindingDraft] = useState<Record<AiFeatureId, string | null>>({} as Record<AiFeatureId, string | null>)
   const [statsMode, setStatsMode] = useState<'feature' | 'model' | 'status'>('feature')
@@ -3550,18 +3627,35 @@ function AiConfigCenter({
   const [modelError, setModelError] = useState('')
   const [providerActionError, setProviderActionError] = useState('')
   const selectedTemplate = providerTemplates.find((template) => template.id === selectedTemplateId)
-  const userProfiles = activeProfiles.filter((profile) => profile.source === 'user')
+  const userProfiles = allProfiles.filter((profile) => profile.source === 'user')
+  const systemProfiles = allProfiles.filter((profile) => profile.source !== 'user')
   const profileStats = new Map(featureConfig?.stats.byProfile.map((item) => [item.profileId, item]) ?? [])
   const featureStats = new Map(featureConfig?.stats.byFeature.map((item) => [item.featureId, item]) ?? [])
+  const recentFailures = featureConfig?.stats.recentFailures ?? []
   const boundFeatureCount = featureConfig?.bindings.filter((binding) => binding.profileId).length ?? 0
-  const userPassCount = userProfiles.filter((profile) => healthById.get(profile.id)?.status === 'pass').length
+  const userPassCount = userProfiles.filter((profile) => profile.enabled && healthById.get(profile.id)?.status === 'pass').length
   const userFailCount = userProfiles.filter((profile) => {
+    if (!profile.enabled) return false
     const healthProfile = healthById.get(profile.id)
     return healthProfile?.status === 'fail' || Boolean(profile.configurationError)
   }).length
   const discoveredModels = modelDiscovery?.models.length
     ? modelDiscovery.models
     : providerTemplates.find((template) => template.id === selectedTemplateId || template.provider === providerDraft.provider)?.models ?? []
+  const latestValidationAt = maxIsoTimestamp([
+    ...(health?.profiles.map((profile) => profile.checkedAt) ?? []),
+    ...(featureConfig?.bindings.map((binding) => binding.validatedAt ?? null) ?? []),
+  ])
+  const recentFailure = recentFailures[0] ?? null
+  const modelSourceLabel = modelDiscovery
+    ? modelDiscovery.source === 'provider'
+      ? '实时拉取'
+      : modelDiscovery.source === 'cache'
+        ? '缓存模型'
+        : '平台模板'
+    : providerDraft.model.trim()
+      ? '手动填写'
+      : ''
   const dirty = Boolean(
     featureConfig?.bindings.some((binding) => (bindingDraft[binding.featureId] ?? null) !== (binding.profileId ?? null)),
   )
@@ -3684,7 +3778,7 @@ function AiConfigCenter({
       <div className="panel-title">
         <h2>
           <Sparkles size={17} />
-          AI 配置中心
+          API 配置总览
         </h2>
         <button className="ghost-button" type="button" onClick={onRunHealth} disabled={healthLoading}>
           {healthLoading ? <Loader2 className="spin" size={18} /> : <RefreshCcw size={18} />}
@@ -3703,9 +3797,28 @@ function AiConfigCenter({
         body={
           featureConfig
             ? `${featureConfig.security.keyStorage} 托管密钥，前端只保存功能绑定，不接触 API Key。`
-            : 'API Key 只允许配置在服务端 Secrets。若将来允许用户自填 Key，需要改成加密存储或本地模式。'
+          : 'API Key 只允许配置在服务端 Secrets。若将来允许用户自填 Key，需要改成加密存储或本地模式。'
         }
       />
+
+      <div className="ai-overview-line">
+        <strong>已保存 {userProfiles.length} 个平台</strong>
+        <span>{userPassCount} 个可用</span>
+        <span>{userFailCount} 个异常</span>
+        <span>{boundFeatureCount} 个功能已绑定</span>
+      </div>
+
+      <div className="ai-overview-meta">
+        <span>最近验证时间：{formatDateTime(latestValidationAt)}</span>
+        <span>最近一次 AI 失败：{recentFailure && featureConfig ? `${featureLabel(featureConfig, recentFailure.featureId)} · ${recentFailure.errorCode ?? 'UNKNOWN'}` : '暂无失败记录'}</span>
+      </div>
+      {recentFailure ? (
+        <InlineNotice
+          tone="warning"
+          title="最近失败原因"
+          body={`${recentFailure.errorMessage ?? '请查看 ai_requests 日志。'} 建议：${suggestionForAiErrorCode(recentFailure.errorCode)}`}
+        />
+      ) : null}
 
       <div className="ai-config-summary">
         <Metric label="已保存平台" value={userProfiles.length.toString()} icon={BrainCircuit} />
@@ -3734,6 +3847,7 @@ function AiConfigCenter({
                 <strong>{template.label}</strong>
               </div>
               <span>{template.baseUrl || 'Base URL 需手动填写'}</span>
+              <small>{templateCapabilityText(template)}</small>
               <small>{template.notes}</small>
             </button>
           ))}
@@ -3751,6 +3865,7 @@ function AiConfigCenter({
             <div className="ai-template-detail-meta">
               <span>推荐模型：{selectedTemplate.defaultModel || '按平台控制台填写'}</span>
               <span>Key 提示：{selectedTemplate.keyHint}</span>
+              <span>能力标签：{templateCapabilityText(selectedTemplate)}</span>
               <span>视觉支持：{selectedTemplate.models.some((item) => item.capabilities.includes('vision')) ? '部分模型支持' : '默认不支持'}</span>
               <span>HTML 生成：{selectedTemplate.models.some((item) => item.capabilities.includes('html')) ? '推荐' : '需自行确认'}</span>
             </div>
@@ -3826,6 +3941,10 @@ function AiConfigCenter({
               <input type="checkbox" checked={providerDraft.supportsHtmlGeneration} onChange={(event) => setProviderDraft((draft) => ({ ...draft, supportsHtmlGeneration: event.target.checked }))} />
               <span>允许用于 HTML 生成</span>
             </label>
+            <label className="toggle-row">
+              <input type="checkbox" checked={providerDraft.enabled} onChange={(event) => setProviderDraft((draft) => ({ ...draft, enabled: event.target.checked }))} />
+              <span>启用此平台</span>
+            </label>
           </div>
           {discoveredModels.length ? (
             <div className="ai-model-chip-list">
@@ -3851,10 +3970,14 @@ function AiConfigCenter({
           ) : null}
           {modelDiscovery ? (
             <p className="ai-model-discovery-note">
-              模型来源：{modelDiscovery.source === 'provider' ? '实时拉取' : modelDiscovery.source === 'cache' ? '缓存模型' : '平台模板'} ·
+              模型来源：{modelSourceLabel} ·
               {' '}Host：{modelDiscovery.baseUrlHost} ·
               {' '}{modelDiscovery.validated ? '当前 Key 已通过模型列表验证' : '当前列表未代表 API 已验证可用'} ·
               {' '}{formatDateTime(modelDiscovery.generatedAt)}
+            </p>
+          ) : providerDraft.model.trim() ? (
+            <p className="ai-model-discovery-note">
+              模型来源：{modelSourceLabel} · 当前模型尚未验证可用。你仍然可以先保存，再通过“重新验证”或功能绑定测试它。
             </p>
           ) : null}
           {modelError ? <p className="ai-profile-error">{modelError}</p> : null}
@@ -3899,12 +4022,38 @@ function AiConfigCenter({
           </div>
         ) : (
           <div className="ai-feature-grid">
+            <section className="ai-feature-card available" key="health-check">
+              <div className="ai-feature-card-head">
+                <div>
+                  <strong>AI 健康检查</strong>
+                  <span>逐个平台做真实轻量调用，确认当前 Provider、模型和 Key 是否真的可用。</span>
+                </div>
+                <span className={`status-pill ${health && health.profiles.some((profile) => profile.status === 'fail') ? 'fail' : 'pass'}`}>
+                  {health ? '可执行' : '待检查'}
+                </span>
+              </div>
+              <div className="ai-feature-meta">
+                <span>函数：ai-health</span>
+                <span>所需能力：文本</span>
+                <span>当前范围：按已启用平台逐个验证</span>
+                <span>最近验证：{formatDateTime(health?.generatedAt ?? null)}</span>
+                <span>可用/异常：{health ? `${health.profiles.filter((profile) => profile.status === 'pass').length}/${health.profiles.filter((profile) => profile.status === 'fail').length}` : '未检查'}</span>
+                <span>最近失败：{recentFailure && recentFailure.requestType === 'health_check' ? recentFailure.errorCode ?? 'UNKNOWN' : '暂无'}</span>
+              </div>
+              <div className="ai-config-actions">
+                <button className="ghost-button" type="button" onClick={onRunHealth} disabled={healthLoading}>
+                  {healthLoading ? <Loader2 className="spin" size={18} /> : <RefreshCcw size={18} />}
+                  立即检查
+                </button>
+              </div>
+            </section>
             {featureConfig.features.map((feature) => {
               const selectedBinding = featureConfig.bindings.find((binding) => binding.featureId === feature.id)
               const selectedProfileId = bindingDraft[feature.id] ?? selectedBinding?.profileId ?? ''
-              const selectedProfile = activeProfiles.find((profile) => profile.id === selectedProfileId)
+              const selectedProfile = allProfiles.find((profile) => profile.id === selectedProfileId)
               const stats = featureStats.get(feature.requestType) ?? featureStats.get(feature.id)
               const mismatch = selectedProfile ? profileCapabilityMismatch(feature.requiredCapability, selectedProfile) : ''
+              const actualModelMismatch = stats?.lastUsedModel && selectedProfile?.model && stats.lastUsedModel !== selectedProfile.model
               return (
                 <section className={`ai-feature-card ${feature.status}`} key={feature.id}>
                   <div className="ai-feature-card-head">
@@ -3921,10 +4070,10 @@ function AiConfigCenter({
                     <select
                       value={selectedProfileId}
                       onChange={(event) => updateBinding(feature.id, event.target.value)}
-                      disabled={activeProfiles.length === 0 || feature.status === 'not_deployed'}
+                      disabled={selectableProfiles.length === 0 || feature.status === 'not_deployed'}
                     >
                       <option value="">未绑定：使用系统默认</option>
-                      {activeProfiles.map((profile) => (
+                      {selectableProfiles.map((profile) => (
                         <option key={`${feature.id}-${profile.id}`} value={profile.id}>
                           {profile.label} · {profile.model}
                         </option>
@@ -3934,17 +4083,27 @@ function AiConfigCenter({
                   <div className="ai-feature-meta">
                     <span>函数：{feature.functionName}</span>
                     <span>能力：{capabilityLabel(feature.requiredCapability)}</span>
+                    <span>绑定状态：{selectedProfileId ? '已绑定' : '未绑定'}</span>
                     <span>当前平台：{selectedProfile?.label ?? '系统默认'}</span>
                     <span>当前模型：{selectedProfile?.model ?? '未绑定'}</span>
                     <span>Host：{selectedProfile?.baseUrlHost ?? '未公开'}</span>
                     <span>验证：{validationLabel(selectedBinding)}</span>
-                    <span>实际模型：{selectedBinding?.validatedModel ?? selectedProfile?.model ?? '未验证'}</span>
+                    <span>上次验证模型：{selectedBinding?.validatedModel ?? '未验证'}</span>
+                    <span>最近真实调用模型：{stats?.lastUsedModel ?? '暂无'}</span>
                     <span>最近调用：{formatDateTime(stats?.lastCalledAt ?? null)}</span>
                     <span>成功/失败：{stats ? `${stats.ok}/${stats.error}` : '0/0'}</span>
                   </div>
                   {mismatch ? <p className="ai-profile-error">{mismatch}</p> : null}
                   {selectedBinding?.validatedModel && selectedProfile?.model && selectedBinding.validatedModel !== selectedProfile.model ? (
                     <p className="ai-profile-error">注意：Provider 返回的实际模型与配置模型不一致，请检查平台路由或模型别名。</p>
+                  ) : null}
+                  {actualModelMismatch ? (
+                    <p className="ai-profile-error">注意：最近真实调用使用的是 {stats?.lastUsedModel}，与当前绑定模型 {selectedProfile?.model} 不一致，请检查平台路由或模型别名。</p>
+                  ) : null}
+                  {stats?.lastErrorMessage ? (
+                    <p className="ai-profile-error">
+                      最近错误：{stats.lastErrorCode ? `${stats.lastErrorCode} · ` : ''}{stats.lastErrorMessage}
+                    </p>
                   ) : null}
                   {selectedBinding?.validationError ? <p className="ai-profile-error">{selectedBinding.validationError}</p> : null}
                 </section>
@@ -3973,7 +4132,9 @@ function AiConfigCenter({
               const healthProfile = healthById.get(profile.id)
               const template = providerTemplates.find((item) => item.provider === profile.provider)
               const profileStat = profileStats.get(profile.id)
-              const status = healthProfile?.status ?? (profile.configured === false || profile.configurationError ? 'fail' : 'idle')
+              const status = !profile.enabled
+                ? 'disabled'
+                : healthProfile?.status ?? (profile.configured === false || profile.configurationError ? 'fail' : 'idle')
               return (
                 <section className={`ai-profile-card ${status}`} key={profile.id}>
                   <div className="ai-profile-head">
@@ -3985,7 +4146,7 @@ function AiConfigCenter({
                       </div>
                     </div>
                     <span className={`status-pill ${status}`}>
-                      {status === 'pass' ? '可用' : status === 'fail' ? '异常' : '未验证'}
+                      {status === 'pass' ? '可用' : status === 'fail' ? '异常' : status === 'disabled' ? '已停用' : '未验证'}
                     </span>
                   </div>
                   <div className="ai-profile-meta">
@@ -4004,7 +4165,7 @@ function AiConfigCenter({
                     <button className="ghost-button" type="button" onClick={() => editProvider(profile)} disabled={providerSaving}>
                       编辑
                     </button>
-                    <button className="ghost-button" type="button" onClick={() => void onRevalidateProvider(profile.id)} disabled={providerSaving}>
+                    <button className="ghost-button" type="button" onClick={() => void onRevalidateProvider(profile.id)} disabled={providerSaving || !profile.enabled}>
                       重新验证
                     </button>
                     <button className="ghost-button danger" type="button" onClick={() => void onDeleteProvider(profile.id)} disabled={providerSaving}>
@@ -4026,14 +4187,14 @@ function AiConfigCenter({
           </div>
         </div>
         <div className="ai-profile-grid">
-          {activeProfiles.filter((profile) => profile.source !== 'user').length === 0 ? (
+          {systemProfiles.length === 0 ? (
             <div className="empty-state compact">
               <Sparkles size={22} />
               <strong>没有读取到系统预设模型</strong>
               <p>请部署 ai-profiles 并在 Supabase Edge Function Secrets 中配置模型。</p>
             </div>
           ) : (
-            activeProfiles.filter((profile) => profile.source !== 'user').map((profile) => {
+            systemProfiles.map((profile) => {
               const healthProfile = healthById.get(profile.id)
               const template = providerTemplates.find((item) => item.provider === profile.provider)
               const status = healthProfile?.status ?? (profile.configured === false || profile.configurationError ? 'fail' : 'idle')
@@ -4114,6 +4275,41 @@ function AiConfigCenter({
                       <span />
                     </div>
                   ))}
+          </div>
+        </div>
+      ) : null}
+
+      {featureConfig ? (
+        <div className="ai-stats-panel">
+          <div className="ai-section-title">
+            <div>
+              <strong>故障诊断</strong>
+              <p>最近失败列表和错误码解释，帮助你快速判断是平台、模型还是后端部署问题。</p>
+            </div>
+          </div>
+          <div className="ai-diagnostic-list">
+            {recentFailures.length === 0 ? (
+              <div className="empty-state compact">
+                <Check size={22} />
+                <strong>最近没有失败记录</strong>
+                <p>如果之后出现异常，这里会列出最近失败的功能、模型和修复建议。</p>
+              </div>
+            ) : (
+              recentFailures.map((failure, index) => (
+                <section className="ai-diagnostic-card" key={`${failure.requestType}-${failure.createdAt}-${index}`}>
+                  <div className="ai-diagnostic-head">
+                    <strong>{featureLabel(featureConfig, failure.featureId)}</strong>
+                    <span>{formatDateTime(failure.createdAt)}</span>
+                  </div>
+                  <p>
+                    {failure.requestType} · {failure.errorCode ?? 'UNKNOWN'} · {failure.errorMessage ?? '未提供错误详情。'}
+                  </p>
+                  <span>
+                    当前建议：{suggestionForAiErrorCode(failure.errorCode)}
+                  </span>
+                </section>
+              ))
+            )}
           </div>
         </div>
       ) : null}
@@ -6033,6 +6229,22 @@ function formatLatency(milliseconds: number) {
   return `${(milliseconds / 1000).toFixed(1)}s`
 }
 
+function maxIsoTimestamp(values: Array<string | null | undefined>) {
+  return values.filter((value): value is string => Boolean(value)).sort().at(-1) ?? null
+}
+
+function suggestionForAiErrorCode(code: string | null | undefined) {
+  const suggestions: Record<string, string> = {
+    FUNCTION_NOT_DEPLOYED: '对应 Edge Function 可能尚未部署，或前端配置的 Supabase URL / anon key 不正确。',
+    MODEL_TIMEOUT: '当前模型响应过慢，建议换用更快模型、缩短输入，或切换系统默认模型。',
+    PROVIDER_AUTH_FAILED: '请检查平台、Base URL、API Key 是否匹配，并确认该 Key 仍可用。',
+    MODEL_OUTPUT_INVALID: '模型输出格式不合规，建议换更适合 HTML 生成的模型，或简化生成要求。',
+    PROVIDER_UNAVAILABLE: 'Provider 当前不可用或限流，可以稍后重试或切换平台。',
+    MODEL_NOT_CONFIGURED: '请到功能绑定区重新绑定一个支持所需能力的模型。',
+  }
+  return suggestions[code ?? ''] ?? '请查看 ai_requests 日志、平台状态和 AI 健康检查继续定位。'
+}
+
 function mergeCheckStatus(checks: Array<ClientPreflightResult['checks'][number] | undefined>) {
   const present = checks.filter(Boolean) as ClientPreflightResult['checks']
   if (present.some((check) => check.status === 'fail')) return 'fail'
@@ -6060,6 +6272,18 @@ function modelCapabilitySummary(model: AiModelOption) {
     return '文本'
   })
   return labels.length ? labels.join(' / ') : '能力未知'
+}
+
+function templateCapabilityText(template: AiFeatureConfigPayload['providerTemplates'][number]) {
+  const labels = new Set<string>(['文本'])
+  for (const model of template.models) {
+    for (const capability of model.capabilities) {
+      if (capability === 'vision') labels.add('视觉')
+      if (capability === 'long_context') labels.add('长上下文')
+      if (capability === 'html') labels.add('HTML 生成')
+    }
+  }
+  return Array.from(labels).join(' / ')
 }
 
 function profileCapabilityText(profile: AiProfile) {

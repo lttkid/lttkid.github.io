@@ -1,5 +1,5 @@
 export type SortKey = 'manual' | 'imported_at' | 'source_modified_at'
-export type AppView = 'library' | 'generator' | 'reader' | 'notes' | 'stats' | 'personas' | 'deploy'
+export type AppView = 'library' | 'generator' | 'reader' | 'notes' | 'stats' | 'personas' | 'deploy' | 'api-config'
 
 export interface AppUser {
   id: string
@@ -234,6 +234,9 @@ export interface AiStatBucket {
   ok: number
   error: number
   lastCalledAt: string | null
+  lastUsedModel?: string | null
+  lastErrorCode?: string | null
+  lastErrorMessage?: string | null
 }
 
 export interface AiBindingValidation {
@@ -259,6 +262,18 @@ export interface AiFeatureConfigPayload {
     byModel: Array<AiStatBucket & { model: string }>
     byProfile: Array<AiStatBucket & { profileId: string }>
     byStatus: Array<{ status: string; count: number }>
+    recentFailures: Array<{
+      featureId: string
+      requestType: string
+      provider: string
+      model: string
+      usedModel: string | null
+      profileId: string | null
+      profileSource: string | null
+      errorCode: string | null
+      errorMessage: string | null
+      createdAt: string
+    }>
   }
   security: {
     keyStorage: string
