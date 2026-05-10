@@ -1,9 +1,26 @@
 export type SortKey = 'imported_at' | 'source_modified_at'
-export type AppView = 'library' | 'reader' | 'notes' | 'stats' | 'personas' | 'deploy'
+export type AppView = 'library' | 'generator' | 'reader' | 'notes' | 'stats' | 'personas' | 'deploy'
 
 export interface AppUser {
   id: string
   email?: string
+  displayName?: string
+  avatarUrl?: string | null
+  avatarColor?: string
+}
+
+export interface UserProfile {
+  owner_id: string
+  display_name: string
+  avatar_url: string | null
+  avatar_color: string
+  updated_at: string
+}
+
+export interface UserProfileDraft {
+  displayName: string
+  avatarColor: string
+  avatarFile?: File | null
 }
 
 export interface Category {
@@ -57,13 +74,24 @@ export interface ReadingSession {
   last_scroll: number
 }
 
+export interface AnnotationLocator {
+  strategy: 'text-position-v1'
+  start: number
+  end: number
+  exact: string
+  prefix: string
+  suffix: string
+}
+
 export interface Highlight {
   id: string
   owner_id: string
   document_id: string
   selected_text: string
   note: string | null
-  color: string
+  color: string | null
+  text_color: string | null
+  locator: AnnotationLocator | null
   created_at: string
 }
 
@@ -74,6 +102,33 @@ export interface HighlightWithDocument extends Highlight {
   > | null
 }
 
+export type CompanionBodyShape = 'bean' | 'orb' | 'capsule'
+export type CompanionEars = 'none' | 'soft' | 'pointed'
+export type CompanionTail = 'none' | 'curl' | 'spark'
+export type CompanionExpression = 'curious' | 'happy' | 'focused'
+export type CompanionMotion = 'still' | 'gentle' | 'lively'
+export type CompanionSize = 'small' | 'medium' | 'large'
+
+export interface CompanionVisualConfig {
+  version: 1
+  bodyShape: CompanionBodyShape
+  palette: {
+    body: string
+    accent: string
+    eye: string
+    cheek: string
+  }
+  features: {
+    ears: CompanionEars
+    antenna: boolean
+    tail: CompanionTail
+    glasses: boolean
+  }
+  expression: CompanionExpression
+  motion: CompanionMotion
+  size: CompanionSize
+}
+
 export interface Persona {
   id: string
   owner_id: string
@@ -82,8 +137,15 @@ export interface Persona {
   tone: string
   system_prompt: string
   default_model: string | null
+  visual_config: CompanionVisualConfig
+  companion_enabled: boolean
   created_at: string
 }
+
+export type PersonaDraft = Pick<
+  Persona,
+  'name' | 'tone' | 'system_prompt' | 'default_model' | 'visual_config' | 'companion_enabled'
+>
 
 export interface AiProfile {
   id: string
@@ -93,6 +155,11 @@ export interface AiProfile {
   enabled: boolean
   configured?: boolean
   baseUrlHost?: string
+  source?: 'server' | 'user'
+  userProviderId?: string
+  keyHint?: string | null
+  supportsVision?: boolean
+  supportsHtmlGeneration?: boolean
 }
 
 export interface AiHealthProfile extends AiProfile {
@@ -109,9 +176,67 @@ export interface AiHealthResult {
   profiles: AiHealthProfile[]
 }
 
+export type AiFeatureId = 'summarize' | 'explain' | 'generate_html' | 'image_question' | 'persona_chat'
+
+export type AiFeatureCapability = 'text' | 'vision' | 'html'
+
+export interface AiFeatureDefinition {
+  id: AiFeatureId
+  label: string
+  description: string
+  requestType: string
+  functionName: string
+  requiredCapability: AiFeatureCapability
+  status: 'available' | 'not_deployed' | 'not_configured'
+}
+
+export interface AiFeatureBinding {
+  featureId: AiFeatureId
+  profileId: string | null
+  updatedAt: string | null
+}
+
+export interface AiStatBucket {
+  total: number
+  ok: number
+  error: number
+  lastCalledAt: string | null
+}
+
+export interface AiFeatureConfigPayload {
+  generatedAt: string
+  profiles: AiProfile[]
+  features: AiFeatureDefinition[]
+  bindings: AiFeatureBinding[]
+  stats: {
+    total: number
+    byFeature: Array<AiStatBucket & { featureId: string }>
+    byModel: Array<AiStatBucket & { model: string }>
+    byStatus: Array<{ status: string; count: number }>
+  }
+  security: {
+    keyStorage: string
+    frontendKeyAccess: boolean
+    userKeyMode: string
+  }
+}
+
+export interface AiUserProviderDraft {
+  id?: string
+  label: string
+  provider: string
+  baseUrl: string
+  model: string
+  apiKey?: string
+  supportsVision: boolean
+  supportsHtmlGeneration: boolean
+  enabled: boolean
+}
+
 export interface AiRequestBreakdown {
   explain: number
   summarize: number
+  generateHtml: number
   healthCheck: number
   failed: number
 }
@@ -127,12 +252,45 @@ export interface LibraryPayload {
 
 export interface StatsSummary {
   totalReadSeconds: number
+  totalDocumentCount: number
+  readDocumentCount: number
+  completedDocumentCount: number
   favoriteCount: number
   unreadCount: number
+  averageProgress: number
+  completionRate: number
+  readRate: number
+  unreadRate: number
+  totalWordCount: number
+  totalEstimateMinutes: number
+  todayReadMinutes: number
+  weeklyReadMinutes: number
+  dailyAverageMinutes: number
+  longestStreakDays: number
   aiRequestCount: number
   categoryMinutes: Array<{ name: string; minutes: number; color: string }>
-  dailyMinutes: Array<{ day: string; minutes: number }>
-  recentDocuments: Array<{ id: string; title: string; lastReadAt: string }>
+  dailyMinutes: Array<{ day: string; date: string; minutes: number }>
+  progressBuckets: Array<{ label: string; count: number }>
+  recentDocuments: Array<{
+    id: string
+    title: string
+    lastReadAt: string
+    progress: number
+    categoryName: string
+    categoryColor: string
+    estimateMinutes: number
+  }>
+  backlogDocuments: Array<{
+    id: string
+    title: string
+    reason: string
+    progress: number
+    categoryName: string
+    categoryColor: string
+    estimateMinutes: number
+    favorite: boolean
+    lastReadAt: string | null
+  }>
 }
 
 export interface ExplainRequest {
@@ -142,9 +300,62 @@ export interface ExplainRequest {
   modelId?: string
 }
 
+export interface SummaryRequest {
+  documentId: string
+  personaId?: string
+  modelId?: string
+}
+
 export interface ExplainResponse {
   answer: string
   model: string
+}
+
+export type HtmlGenerationType = 'learning' | 'animation' | 'interactive' | 'game' | 'general'
+export type HtmlGenerationMode = 'create' | 'revise'
+
+export interface HtmlGenerationImageInput {
+  name: string
+  mimeType: 'image/png' | 'image/jpeg' | 'image/webp'
+  data: string
+}
+
+export interface HtmlGenerationRequest {
+  mode: HtmlGenerationMode
+  type: HtmlGenerationType
+  brief: string
+  currentHtml?: string
+  revisionInstruction?: string
+  image?: HtmlGenerationImageInput
+  personaId?: string
+  modelId?: string
+  audience?: string
+  stylePreset?: string
+}
+
+export interface HtmlGenerationResponse {
+  title: string
+  html: string
+  summary: string
+  type: HtmlGenerationType
+  model: string
+  promptVersion: string
+}
+
+export interface GeneratedHtmlSaveDraft {
+  title: string
+  html: string
+  categoryId: string | null
+  generationType: HtmlGenerationType
+  brief: string
+  promptVersion: string
+  summary?: string
+}
+
+export interface GeneratedHtmlSaveResult {
+  document: DocumentRecord
+  status: 'saved' | 'duplicate'
+  message: string
 }
 
 export interface DocumentUpdateDraft {

@@ -1,5 +1,20 @@
 create extension if not exists "pgcrypto";
 
+create table if not exists public.user_profiles (
+  owner_id uuid primary key references auth.users(id) on delete cascade,
+  display_name text not null default '',
+  avatar_url text,
+  avatar_color text not null default '#2563EB',
+  updated_at timestamptz not null default now(),
+  constraint user_profiles_avatar_color_hex check (avatar_color ~ '^#[0-9A-Fa-f]{6}$')
+);
+
+alter table if exists public.user_profiles
+  add column if not exists display_name text not null default '',
+  add column if not exists avatar_url text,
+  add column if not exists avatar_color text not null default '#2563EB',
+  add column if not exists updated_at timestamptz not null default now();
+
 create table if not exists public.categories (
   id uuid primary key default gen_random_uuid(),
   owner_id uuid not null references auth.users(id) on delete cascade,
@@ -73,7 +88,9 @@ create table if not exists public.highlights (
   document_id uuid not null references public.documents(id) on delete cascade,
   selected_text text not null,
   note text,
-  color text not null default '#FDE68A',
+  color text,
+  text_color text,
+  locator jsonb,
   created_at timestamptz not null default now()
 );
 
@@ -94,8 +111,14 @@ create table if not exists public.personas (
   tone text not null default '',
   system_prompt text not null default '',
   default_model text,
+  visual_config jsonb not null default '{}'::jsonb,
+  companion_enabled boolean not null default true,
   created_at timestamptz not null default now()
 );
+
+alter table if exists public.personas
+  add column if not exists visual_config jsonb not null default '{}'::jsonb,
+  add column if not exists companion_enabled boolean not null default true;
 
 create table if not exists public.ai_requests (
   id uuid primary key default gen_random_uuid(),
@@ -136,6 +159,12 @@ create trigger set_notes_updated_at
 before update on public.notes
 for each row execute function public.set_updated_at();
 
+drop trigger if exists set_user_profiles_updated_at on public.user_profiles;
+create trigger set_user_profiles_updated_at
+before update on public.user_profiles
+for each row execute function public.set_updated_at();
+
+alter table public.user_profiles enable row level security;
 alter table public.categories enable row level security;
 alter table public.tags enable row level security;
 alter table public.documents enable row level security;
@@ -145,6 +174,10 @@ alter table public.highlights enable row level security;
 alter table public.notes enable row level security;
 alter table public.personas enable row level security;
 alter table public.ai_requests enable row level security;
+
+drop policy if exists "user profiles owner access" on public.user_profiles;
+create policy "user profiles owner access" on public.user_profiles
+for all using (auth.uid() = owner_id) with check (auth.uid() = owner_id);
 
 drop policy if exists "categories owner access" on public.categories;
 create policy "categories owner access" on public.categories
@@ -322,6 +355,19 @@ for all using (
 
 insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
 values (
+  'user-avatars',
+  'user-avatars',
+  false,
+  2097152,
+  array['image/png', 'image/jpeg', 'image/webp', 'image/gif']
+)
+on conflict (id) do update set
+  public = excluded.public,
+  file_size_limit = excluded.file_size_limit,
+  allowed_mime_types = excluded.allowed_mime_types;
+
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values (
   'html-docs',
   'html-docs',
   false,
@@ -332,6 +378,37 @@ on conflict (id) do update set
   public = excluded.public,
   file_size_limit = excluded.file_size_limit,
   allowed_mime_types = excluded.allowed_mime_types;
+
+drop policy if exists "read own user avatars" on storage.objects;
+create policy "read own user avatars" on storage.objects
+for select using (
+  bucket_id = 'user-avatars'
+  and (storage.foldername(name))[1] = auth.uid()::text
+);
+
+drop policy if exists "insert own user avatars" on storage.objects;
+create policy "insert own user avatars" on storage.objects
+for insert with check (
+  bucket_id = 'user-avatars'
+  and (storage.foldername(name))[1] = auth.uid()::text
+);
+
+drop policy if exists "update own user avatars" on storage.objects;
+create policy "update own user avatars" on storage.objects
+for update using (
+  bucket_id = 'user-avatars'
+  and (storage.foldername(name))[1] = auth.uid()::text
+) with check (
+  bucket_id = 'user-avatars'
+  and (storage.foldername(name))[1] = auth.uid()::text
+);
+
+drop policy if exists "delete own user avatars" on storage.objects;
+create policy "delete own user avatars" on storage.objects
+for delete using (
+  bucket_id = 'user-avatars'
+  and (storage.foldername(name))[1] = auth.uid()::text
+);
 
 drop policy if exists "read own html docs" on storage.objects;
 create policy "read own html docs" on storage.objects

@@ -12,8 +12,10 @@
 ```bash
 supabase functions deploy ai-profiles
 supabase functions deploy ai-health
+supabase functions deploy ai-feature-config
 supabase functions deploy ai-explain
 supabase functions deploy ai-summarize
+supabase functions deploy ai-generate-html
 ```
 
 7. Set Edge Function secrets:
@@ -48,7 +50,7 @@ You can also deploy the Supabase backend from GitHub Actions. Add these public f
 - `SUPABASE_PROJECT_REF`
 - `SUPABASE_DB_PASSWORD` if you want the workflow to apply migrations
 
-Then run **Deploy Supabase backend** manually. Use `apply_migrations=true` only when you are ready to push `supabase/migrations` to the linked project. Use `deploy_functions=true` to deploy `ai-profiles`, `ai-health`, `ai-explain`, and `ai-summarize`.
+Then run **Deploy Supabase backend** manually. Use `apply_migrations=true` only when you are ready to push `supabase/migrations` to the linked project. Use `deploy_functions=true` to deploy `ai-profiles`, `ai-health`, `ai-feature-config`, `ai-explain`, `ai-summarize`, and `ai-generate-html`.
 
 ## Public GitHub Pages Repository
 
@@ -65,8 +67,12 @@ In the deployed app, open **系统体检** after logging in. It should show four
 - Supabase frontend config is present and the login session is active.
 - `html-docs` private Storage is accessible.
 - `ai-profiles` returns at least one model profile.
+- `ai-generate-html` can generate a strict self-contained HTML page through the generator, including optional image-based question understanding when the selected model supports vision input.
 - The AI configuration center shows profiles without exposing API keys.
+- The AI configuration center can load `ai-feature-config`, save per-feature profile bindings, and show not-deployed hints for unavailable backends.
 - Clicking **测试 AI 连接** runs `ai-health` and records `health_check` rows in `ai_requests`.
+
+The API configuration center supports server-managed profiles and per-user OpenAI-compatible providers. User-entered API keys are submitted once to `ai-feature-config`, encrypted with `AI_USER_KEY_ENCRYPTION_SECRET`, and never returned to the frontend. The UI only shows a masked key hint.
 
 Before release, run the frontend smoke and live tests with a real Auth user that has at least one synced or uploaded document:
 
@@ -155,6 +161,7 @@ After deploying, confirm:
 - Frontend upload creates documents under `html-docs/{user-id}/uploads/{yyyy}/{mm}/...` and writes `documents.owner_id` as the current user.
 - Reader starts in 阅读模式, and a trusted sample with inline click logic only responds after switching to 交互模式.
 - Selecting text in the reader opens the assistant panel and AI requests go through Edge Functions.
+- AI HTML 生成器 can preview, revise, optionally read a local question image, and save generated HTML into `html-docs/{user-id}/generated/{yyyy}/{mm}/...`.
 - In **系统体检**, the AI configuration center can run a real lightweight health check for each enabled OpenAI-compatible profile.
 - Saved highlights appear in **笔记中心**, where they can be filtered, edited, deleted, and opened back in the reader.
 - Archiving a document hides it from the default library, and the archive view can restore it.
@@ -164,7 +171,7 @@ After deploying, confirm:
 - `preflight` fails on missing secrets: expected until `.env.local` or GitHub Secrets are configured.
 - Login works but documents do not load: confirm RLS policies were created by the SQL migration.
 - Storage download fails: confirm files are uploaded under `html-docs/{auth-user-id}/...`.
-- AI calls fail: confirm Edge Functions are deployed, including `ai-health`, and `AI_API_KEY`, `AI_BASE_URL`, and `AI_MODEL` secrets are set.
+- AI calls fail: confirm Edge Functions are deployed, including `ai-health` and `ai-generate-html`, and `AI_API_KEY`, `AI_BASE_URL`, and `AI_MODEL` secrets are set.
 - `sync:html -- --dry-run` shows `scanned: 0`: confirm real files are under the configured `html/` directory and are not only `.gitkeep`.
 - Library full-text search finds titles but not body text: rerun the HTML sync after applying the migration so `content_text`, `word_count`, and `indexed_at` are populated.
 - Uploaded HTML is visible to the uploader but not another user: this is expected. V2 is strictly private per user; use `test:live:isolation` to confirm RLS and Storage policies.

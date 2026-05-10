@@ -115,7 +115,7 @@ try {
     .insert({
       owner_id: primary.user.id,
       name: `Isolation ${runId}`,
-      color: '#2563EB',
+      color: '#5B7CFF',
       sort_order: 999,
     })
     .select('id')

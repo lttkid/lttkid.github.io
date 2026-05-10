@@ -149,10 +149,12 @@ async function queryLatestReadingSession(documentId) {
 }
 
 async function setFrameScroll(frame, progress) {
+  await new Promise((resolve) => setTimeout(resolve, 450))
   await frame.locator('body').evaluate((body, target) => {
     const root = body.ownerDocument.scrollingElement || body.ownerDocument.documentElement
     const max = Math.max(1, root.scrollHeight - root.clientHeight)
     root.scrollTop = max * target
+    body.ownerDocument.dispatchEvent(new Event('scroll'))
   }, progress)
 }
 
@@ -250,7 +252,7 @@ try {
 
     await page.getByRole('button', { name: '统计' }).click()
     await page.getByRole('heading', { name: '阅读统计' }).waitFor({ timeout: 10000 })
-    await page.getByRole('button', { name: title }).waitFor({ timeout: 10000 })
+    await page.locator('.stats-document-row').filter({ hasText: title }).first().waitFor({ timeout: 10000 })
   } finally {
     await page.close()
     await browser.close()

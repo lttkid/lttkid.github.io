@@ -20,6 +20,8 @@ const publicTables = [
   'notes',
   'personas',
   'ai_requests',
+  'ai_feature_bindings',
+  'ai_user_providers',
 ]
 
 const expectedStoragePolicies = [

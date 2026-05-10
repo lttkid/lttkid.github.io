@@ -10,6 +10,7 @@
 - 同步时提取私密全文索引，资料库可搜索 HTML 正文并只显示命中片段
 - 沙盒 iframe 阅读 HTML，默认阅读模式移除原始脚本；可信文档可手动切换交互模式运行文档内部点击逻辑
 - 阅读页浮动功能面板：AI 解释、摘要、高亮、模型和虚拟人物选择
+- AI HTML 生成器：按学习讲解、概念动画、互动理解、HTML 小游戏和通用页面预设 Prompt 生成单文件 HTML，支持相册题目图片、预览、对话式修改和保存入库
 - AI 配置中心：脱敏展示模型配置、真实轻量健康检查、调用统计和失败诊断
 - 笔记中心：跨文档查看、筛选、编辑和删除高亮笔记，并跳回来源文档
 - 资料归档与恢复，不做危险硬删除
@@ -47,8 +48,10 @@ npm run supabase:live:init
 ```bash
 supabase functions deploy ai-profiles
 supabase functions deploy ai-health
+supabase functions deploy ai-feature-config
 supabase functions deploy ai-explain
 supabase functions deploy ai-summarize
+supabase functions deploy ai-generate-html
 ```
 
 6. 设置 Edge Function Secrets：
@@ -59,11 +62,14 @@ supabase secrets set AI_PROFILE_LABEL="Default Model"
 supabase secrets set AI_MODEL="your-model-name"
 supabase secrets set AI_BASE_URL="https://api.openai.com/v1"
 supabase secrets set AI_API_KEY="your-provider-api-key"
+supabase secrets set AI_USER_KEY_ENCRYPTION_SECRET="long-random-secret-for-user-keys"
 ```
 
 多个模型可以用 `AI_PROFILES_JSON` 配置，前端只会看到服务端允许的模型信息，不会看到 API key。
 
 推荐手动把 AI key 配置为 Supabase Edge Function Secrets，不要写进前端环境变量或数据库。部署后可以在“部署中心”的 AI 配置中心点击“测试 AI 连接”，它会通过 `ai-health` 对每个启用模型发起一次极短真实调用，并把成功或失败写入 `ai_requests`。
+
+AI 配置中心还支持用户添加自己的 OpenAI-compatible API 平台、Base URL、模型和 API Key，并把不同功能绑定到不同 Profile，例如阅读摘要、划词解释、AI HTML 生成、图片识题和虚拟人物对话。用户自己的 API Key 只在提交时发给 `ai-feature-config`，由 Edge Function 使用 `AI_USER_KEY_ENCRYPTION_SECRET` 加密后写入 `ai_user_providers`；之后前端只看到脱敏 `keyHint`，不会回显密钥。若某个后端函数尚未部署，例如后续的虚拟人物对话接口，配置中心会显示为“未部署”。
 
 也可以在公开前端仓库中配置后端部署 workflow 所需的 GitHub Secrets：
 
@@ -71,7 +77,7 @@ supabase secrets set AI_API_KEY="your-provider-api-key"
 - `SUPABASE_PROJECT_REF`
 - `SUPABASE_DB_PASSWORD`（仅在 workflow 中勾选 apply migrations 时使用）
 
-然后手动运行 `.github/workflows/deploy-supabase.yml`，选择是否执行 migration 和 Edge Functions 部署。
+然后手动运行 `.github/workflows/deploy-supabase.yml`，选择是否执行 migration 和 Edge Functions 部署。API 配置中心需要部署 `ai-feature-config` 并应用 `007_ai_feature_bindings.sql`、`008_ai_user_providers.sql` migrations。
 
 ## GitHub Pages 部署
 
