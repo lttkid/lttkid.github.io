@@ -102,7 +102,7 @@ Deno.serve(async (req) => {
           await chatCompletion({
             profile,
             temperature: 0,
-            maxTokens: 8,
+            maxTokens: 64,
             timeoutMs: 15000,
             messages: [
               {

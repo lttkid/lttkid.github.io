@@ -3646,24 +3646,32 @@ function ApiConfigView({
     setAiProviderSaving(true)
     setAiFeatureError('')
     setAiFeatureNotice('')
+    const knownProfiles = aiFeatureConfig?.profiles ?? aiProfiles
+    const fallbackLabel = knownProfiles.find((profile) => profile.id === profileId)?.label ?? '该平台'
     try {
       const result = await fetchAiHealth(profileId)
       setAiHealth((current) => mergeAiHealthResults(current, result))
-      const profile = result.profiles[0]
+      const profile = result.profiles.find((item) => item.id === profileId) ?? result.profiles[0]
+      const label = profile?.label ?? fallbackLabel
       if (profile?.status === 'pass') {
         setAiFeatureNoticeTone('success')
-        setAiFeatureNotice(`已重新验证 ${profile.label}，当前接口可用。`)
+        setAiFeatureNotice(`已重新验证 ${label}，当前接口可用。`)
+      } else if (profile) {
+        setAiFeatureNoticeTone('warning')
+        setAiFeatureNotice(`已重新验证 ${label}，但当前不可用：${profile.error ?? '未知错误'}`)
       } else {
         setAiFeatureNoticeTone('warning')
-        setAiFeatureNotice(`已重新验证 ${profile?.label ?? '该平台'}，但当前仍不可用。`)
+        setAiFeatureNotice(`无法重新验证 ${label}，请确认平台已启用并填写了 API Key。`)
       }
     } catch (caught) {
-      setAiFeatureError(caught instanceof Error ? caught.message : '平台重新验证失败。')
-      throw caught
+      setAiFeatureNoticeTone('warning')
+      setAiFeatureNotice(
+        caught instanceof Error ? `重新验证 ${fallbackLabel} 失败：${caught.message}` : `重新验证 ${fallbackLabel} 失败。`,
+      )
     } finally {
       setAiProviderSaving(false)
     }
-  }, [])
+  }, [aiFeatureConfig, aiProfiles])
 
   const removeAiProvider = useCallback(async (profileId: string) => {
     setAiProviderSaving(true)

@@ -682,6 +682,29 @@ type ChatCompletionArgs = {
   timeoutMs?: number
 }
 
+function extractChatAnswer(data: unknown): string {
+  const message = (data as { choices?: Array<{ message?: Record<string, unknown> }> })?.choices?.[0]?.message
+  if (!message) return ''
+  const content = message.content
+  if (typeof content === 'string' && content.trim()) return content
+  if (Array.isArray(content)) {
+    const text = content
+      .map((part) => {
+        if (typeof part === 'string') return part
+        if (part && typeof part === 'object') {
+          const value = (part as { text?: unknown }).text
+          if (typeof value === 'string') return value
+        }
+        return ''
+      })
+      .join('')
+    if (text.trim()) return text
+  }
+  const reasoning = message.reasoning_content
+  if (typeof reasoning === 'string' && reasoning.trim()) return reasoning
+  return ''
+}
+
 export async function chatCompletion(args: ChatCompletionArgs) {
   return (await chatCompletionWithMeta(args)).answer
 }
@@ -746,14 +769,15 @@ export async function chatCompletionWithMeta({
     }
 
     const data = await response.json()
-    const answer = data.choices?.[0]?.message?.content
+    const answer = extractChatAnswer(data)
     if (!answer) {
       const snippet = JSON.stringify(data).slice(0, 300)
-      console.error(`[AI] Empty answer from ${profile.provider}/${profile.model}. Response: ${snippet}`)
-      const err = new AiFunctionError(
-        'MODEL_OUTPUT_INVALID',
-        `AI provider returned an empty answer. Response: ${JSON.stringify(data).slice(0, 200)}`,
-      )
+      const finishReason = data?.choices?.[0]?.finish_reason ?? 'unknown'
+      console.error(`[AI] Empty answer from ${profile.provider}/${profile.model} (finish_reason=${finishReason}). Response: ${snippet}`)
+      const message = finishReason === 'length'
+        ? `AI provider returned an empty answer because output was truncated by max_tokens (finish_reason=length). 请增大模型的 max_tokens 或更换非思考型模型。`
+        : `AI provider returned an empty answer (finish_reason=${finishReason}). Response: ${JSON.stringify(data).slice(0, 200)}`
+      const err = new AiFunctionError('MODEL_OUTPUT_INVALID', message)
       if (attempt < MAX_ATTEMPTS) {
         console.warn(`[AI] Empty answer (attempt ${attempt}) — retrying in 1s`)
         await new Promise((r) => setTimeout(r, 1000))

@@ -288,10 +288,17 @@ function buildUserPrompt(
   return common.join('\n\n')
 }
 
+function stripWrappingMarkdownFences(answer: string): string {
+  const trimmed = answer.trim()
+  const fenced = trimmed.match(/^```[a-zA-Z0-9_-]*\s*\n([\s\S]*?)\n?```\s*$/)
+  if (fenced) return fenced[1].trim()
+  return trimmed
+}
+
 function validateGeneratedHtml(answer: string) {
-  const html = String(answer ?? '').trim()
+  const html = stripWrappingMarkdownFences(String(answer ?? ''))
   if (!html) throw new AiFunctionError('MODEL_OUTPUT_INVALID', 'AI provider returned an empty HTML answer.')
-  if (/^```/m.test(html) || /```/.test(html)) throw new AiFunctionError('MODEL_OUTPUT_INVALID', 'AI output contained Markdown fences instead of raw HTML.')
+  if (/^```/.test(html)) throw new AiFunctionError('MODEL_OUTPUT_INVALID', 'AI output still contained Markdown fences after stripping.')
   if (!/^<!doctype html>/i.test(html)) throw new AiFunctionError('MODEL_OUTPUT_INVALID', 'AI output must start with <!doctype html>.')
   if (!/<html\b[^>]*lang=["']zh-CN["'][^>]*>/i.test(html)) throw new AiFunctionError('MODEL_OUTPUT_INVALID', 'AI output must include <html lang="zh-CN">.')
   if (!/<title>[\s\S]*?<\/title>/i.test(html)) throw new AiFunctionError('MODEL_OUTPUT_INVALID', 'AI output must include a title.')
